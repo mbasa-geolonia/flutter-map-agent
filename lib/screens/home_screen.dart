@@ -2,15 +2,35 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/message.dart';
 import '../models/map_config.dart';
+import '../services/ai_service.dart';
 import '../services/claude_service.dart';
+import '../services/openai_service.dart';
 import '../widgets/chat_panel.dart';
 import '../widgets/map_panel.dart';
 
+enum AiProvider { claude, openAi }
+
 class AppState extends ChangeNotifier {
-  final _claudeService = ClaudeService();
+  AiProvider _aiProvider = AiProvider.claude;
+  AiService _service = ClaudeService();
+
   final List<ChatMessage> messages = [];
   MapConfig mapConfig = MapConfig.defaultConfig;
   bool isLoading = false;
+
+  AiProvider get aiProvider => _aiProvider;
+
+  void switchProvider(AiProvider provider) {
+    if (provider == _aiProvider) return;
+    _aiProvider = provider;
+    _service = switch (provider) {
+      AiProvider.claude => ClaudeService(),
+      AiProvider.openAi => OpenAiService(),
+    };
+    messages.clear();
+    mapConfig = MapConfig.defaultConfig;
+    notifyListeners();
+  }
 
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty || isLoading) return;
@@ -35,7 +55,7 @@ class AppState extends ChangeNotifier {
     isLoading = true;
     notifyListeners();
 
-    await _claudeService.sendMessage(
+    await _service.sendMessage(
       userText: text,
       onText: (responseText) {
         final idx = messages.indexWhere((m) => m.id == assistantId);
@@ -71,7 +91,7 @@ class AppState extends ChangeNotifier {
 
   void clearConversation() {
     messages.clear();
-    _claudeService.clearHistory();
+    _service.clearHistory();
     mapConfig = MapConfig.defaultConfig;
     notifyListeners();
   }
@@ -103,7 +123,51 @@ class _HomeBodyState extends State<_HomeBody> {
 
   @override
   Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final theme = Theme.of(context);
+
     return Scaffold(
+      appBar: AppBar(
+        toolbarHeight: 0,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(40),
+          child: Container(
+            height: 40,
+            color: theme.colorScheme.surfaceContainerLow,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Text(
+                  'AI Provider:',
+                  style: theme.textTheme.labelMedium,
+                ),
+                const SizedBox(width: 8),
+                SegmentedButton<AiProvider>(
+                  segments: const [
+                    ButtonSegment(
+                      value: AiProvider.claude,
+                      label: Text('Claude'),
+                      icon: Icon(Icons.auto_awesome, size: 14),
+                    ),
+                    ButtonSegment(
+                      value: AiProvider.openAi,
+                      label: Text('ChatGPT'),
+                      icon: Icon(Icons.chat_bubble_outline, size: 14),
+                    ),
+                  ],
+                  selected: {state.aiProvider},
+                  onSelectionChanged: (set) =>
+                      state.switchProvider(set.first),
+                  style: ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
       body: Row(
         children: [
           SizedBox(
@@ -129,7 +193,7 @@ class _HomeBodyState extends State<_HomeBody> {
                 child: Center(
                   child: Container(
                     width: 1,
-                    color: Theme.of(context).dividerColor,
+                    color: theme.dividerColor,
                   ),
                 ),
               ),

@@ -2,13 +2,9 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../models/map_config.dart';
+import 'ai_service.dart';
 
-typedef OnTextCallback = void Function(String text);
-typedef OnMapCallback = void Function(MapConfig config);
-typedef OnDoneCallback = void Function();
-typedef OnErrorCallback = void Function(String error);
-
-class ClaudeService {
+class ClaudeService implements AiService {
   static const _apiUrl = 'https://api.anthropic.com/v1/messages';
   static const _model = 'claude-opus-4-6';
   static const String _apiKey = AppConfig.anthropicApiKey;
@@ -107,6 +103,7 @@ class ClaudeService {
     },
   };
 
+  @override
   Future<void> sendMessage({
     required String userText,
     required OnTextCallback onText,
@@ -204,5 +201,6 @@ class ClaudeService {
     return response.body;
   }
 
+  @override
   void clearHistory() => _history.clear();
 }
