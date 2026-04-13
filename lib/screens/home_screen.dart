@@ -11,8 +11,8 @@ import '../widgets/map_panel.dart';
 enum AiProvider { claude, openAi }
 
 class AppState extends ChangeNotifier {
-  AiProvider _aiProvider = AiProvider.claude;
-  AiService _service = ClaudeService();
+  AiProvider _aiProvider = AiProvider.openAi;
+  AiService _service = OpenAiService();
 
   final List<ChatMessage> messages = [];
   MapConfig mapConfig = MapConfig.defaultConfig;

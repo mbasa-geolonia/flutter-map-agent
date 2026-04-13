@@ -67,7 +67,7 @@ class _ChatPanelState extends State<ChatPanel> {
                   color: theme.colorScheme.primary, size: 22),
               const SizedBox(width: 10),
               Text(
-                'Claude Map Agent',
+                'Location Map Agent',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w600,
                 ),

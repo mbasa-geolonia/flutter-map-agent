@@ -127,8 +127,8 @@ class OpenAiService implements AiService {
       String textAccumulator = message['content'] as String? ?? '';
       final toolCalls = message['tool_calls'] as List?;
 
-      // Append assistant message to history
-      _history.add({'role': 'assistant', 'content': message});
+      // Append assistant message to history (message already contains role/content/tool_calls)
+      _history.add(message);
 
       if (finishReason == 'tool_calls' && toolCalls != null) {
         for (final toolCall in toolCalls) {
@@ -163,7 +163,7 @@ class OpenAiService implements AiService {
         final message2 = choice2['message'] as Map<String, dynamic>;
 
         textAccumulator += message2['content'] as String? ?? '';
-        _history.add({'role': 'assistant', 'content': message2});
+        _history.add(message2);
       }
 
       onText(textAccumulator.trim());

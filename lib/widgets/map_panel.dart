@@ -165,10 +165,9 @@ class _MapPanelState extends State<MapPanel> {
                           points: poly.points
                               .map((p) => p.latLng)
                               .toList(),
-                          color: theme.colorScheme.primary
-                              .withAlpha(38),
-                          borderColor: theme.colorScheme.primary,
-                          borderStrokeWidth: 2,
+                          color: Colors.orange.withAlpha(120),
+                          borderColor: Colors.deepOrange,
+                          borderStrokeWidth: 3,
                           label: poly.label,
                         ),
                       )
