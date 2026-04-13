@@ -1,0 +1,208 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../config/app_config.dart';
+import '../models/map_config.dart';
+
+typedef OnTextCallback = void Function(String text);
+typedef OnMapCallback = void Function(MapConfig config);
+typedef OnDoneCallback = void Function();
+typedef OnErrorCallback = void Function(String error);
+
+class ClaudeService {
+  static const _apiUrl = 'https://api.anthropic.com/v1/messages';
+  static const _model = 'claude-opus-4-6';
+  static const String _apiKey = AppConfig.anthropicApiKey;
+
+  final List<Map<String, dynamic>> _history = [];
+
+  static const _systemPrompt =
+      'You are a geography and map assistant. When the user asks about a place, '
+      'location, route, or geographic topic, ALWAYS call the show_map tool to '
+      'update the map panel. After calling the tool, provide a helpful and '
+      'concise explanation of the location. Use accurate coordinates. '
+      'For cities, use zoom 10-12. For streets/buildings, use zoom 15-18. '
+      'For countries/continents, use zoom 4-7. Always show the map first.';
+
+  static const _showMapTool = {
+    'name': 'show_map',
+    'description':
+        'Update the interactive map panel to show a specific location with '
+        'optional markers, polygons, and routes. Call this whenever any '
+        'geographic visualization would help the user understand a location.',
+    'input_schema': {
+      'type': 'object',
+      'properties': {
+        'center_lat': {
+          'type': 'number',
+          'description': 'Latitude of the map center (-90 to 90)',
+        },
+        'center_lng': {
+          'type': 'number',
+          'description': 'Longitude of the map center (-180 to 180)',
+        },
+        'zoom': {
+          'type': 'number',
+          'description':
+              'Zoom level: 1=world, 4=continent, 7=country, 10=city, 13=district, 15=street, 18=building',
+        },
+        'title': {
+          'type': 'string',
+          'description': 'Title shown in the map panel header',
+        },
+        'markers': {
+          'type': 'array',
+          'description': 'Points of interest to pin on the map',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'lat': {'type': 'number', 'description': 'Latitude'},
+              'lng': {'type': 'number', 'description': 'Longitude'},
+              'label': {
+                'type': 'string',
+                'description': 'Text label shown on the pin',
+              },
+            },
+            'required': ['lat', 'lng', 'label'],
+          },
+        },
+        'polygons': {
+          'type': 'array',
+          'description': 'Filled polygon shapes for regions, districts, or areas',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'points': {
+                'type': 'array',
+                'items': {
+                  'type': 'object',
+                  'properties': {
+                    'lat': {'type': 'number'},
+                    'lng': {'type': 'number'},
+                  },
+                  'required': ['lat', 'lng'],
+                },
+              },
+              'label': {'type': 'string'},
+            },
+            'required': ['points'],
+          },
+        },
+        'routes': {
+          'type': 'array',
+          'description': 'Polyline paths or routes between locations',
+          'items': {
+            'type': 'array',
+            'items': {
+              'type': 'object',
+              'properties': {
+                'lat': {'type': 'number'},
+                'lng': {'type': 'number'},
+              },
+              'required': ['lat', 'lng'],
+            },
+          },
+        },
+      },
+      'required': ['center_lat', 'center_lng'],
+    },
+  };
+
+  Future<void> sendMessage({
+    required String userText,
+    required OnTextCallback onText,
+    required OnMapCallback onMap,
+    required OnDoneCallback onDone,
+    required OnErrorCallback onError,
+  }) async {
+    _history.add({'role': 'user', 'content': userText});
+
+    try {
+      final responseBody = await _callApi();
+      final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
+      final stopReason = decoded['stop_reason'] as String;
+      final content = decoded['content'] as List;
+
+      String textAccumulator = '';
+      Map<String, dynamic>? toolUseBlock;
+
+      for (final block in content) {
+        final b = block as Map<String, dynamic>;
+        if (b['type'] == 'text') {
+          textAccumulator += b['text'] as String;
+        } else if (b['type'] == 'tool_use' && b['name'] == 'show_map') {
+          toolUseBlock = b;
+        }
+      }
+
+      // Append full content array to history (required by Anthropic API)
+      _history.add({'role': 'assistant', 'content': content});
+
+      if (stopReason == 'tool_use' && toolUseBlock != null) {
+        final toolInput = toolUseBlock['input'] as Map<String, dynamic>;
+        final toolUseId = toolUseBlock['id'] as String;
+
+        final mapConfig = MapConfig.fromToolInput(toolInput);
+        onMap(mapConfig);
+
+        // Send tool result back so Claude can produce the final text response
+        _history.add({
+          'role': 'user',
+          'content': [
+            {
+              'type': 'tool_result',
+              'tool_use_id': toolUseId,
+              'content':
+                  'Map updated to show: ${mapConfig.title ?? "the requested location"}',
+            }
+          ],
+        });
+
+        final responseBody2 = await _callApi();
+        final decoded2 = jsonDecode(responseBody2) as Map<String, dynamic>;
+        final content2 = decoded2['content'] as List;
+
+        for (final block in content2) {
+          final b = block as Map<String, dynamic>;
+          if (b['type'] == 'text') {
+            textAccumulator += b['text'] as String;
+          }
+        }
+        _history.add({'role': 'assistant', 'content': content2});
+      }
+
+      onText(textAccumulator.trim());
+      onDone();
+    } on http.ClientException catch (e) {
+      onError('Network error: ${e.message}');
+    } catch (e) {
+      onError('$e');
+    }
+  }
+
+  Future<String> _callApi() async {
+    final body = jsonEncode({
+      'model': _model,
+      'max_tokens': 4096,
+      'system': _systemPrompt,
+      'tools': [_showMapTool],
+      'messages': _history,
+    });
+
+    final response = await http.post(
+      Uri.parse(_apiUrl),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': _apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: body,
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('API error ${response.statusCode}: ${response.body}');
+    }
+    return response.body;
+  }
+
+  void clearHistory() => _history.clear();
+}
