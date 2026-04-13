@@ -1,0 +1,13 @@
+abstract final class AppConfig {
+  /// Anthropic Claude API key.
+  static const String anthropicApiKey =
+      'ANTHROPIC_API_KEY';
+
+  /// OpenAI API key.
+  static const String openAiApiKey =
+      'OPENAI_API_KEY';
+
+  /// MapFan tile API key.
+  static const String mapfanApiKey =
+      'MAPFAN_API_KEY';
+}
