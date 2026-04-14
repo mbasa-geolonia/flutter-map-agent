@@ -12,7 +12,7 @@ be deloyed as a Web, MacOS/Win Native, or Mobile Device app.
 The follwing API KEYS will be needed: 
 * Mapfan API Key to display Maps
 * Anthropic API Key to connect to Claude
-* OpenAPI API Key to connect to GhatGPT
+* OpenAPI API Key to connect to ChatGPT
 
 ### To Build
 
