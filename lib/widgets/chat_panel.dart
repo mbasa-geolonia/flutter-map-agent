@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../screens/home_screen.dart';
 import 'message_bubble.dart';
 
@@ -57,14 +58,15 @@ class _ChatPanelState extends State<ChatPanel> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
             color: theme.colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(color: theme.dividerColor),
-            ),
+            border: Border(bottom: BorderSide(color: theme.dividerColor)),
           ),
           child: Row(
             children: [
-              Icon(Icons.smart_toy_outlined,
-                  color: theme.colorScheme.primary, size: 22),
+              Icon(
+                Icons.smart_toy_outlined,
+                color: theme.colorScheme.primary,
+                size: 22,
+              ),
               const SizedBox(width: 10),
               Text(
                 'Location Map Agent',
@@ -88,7 +90,9 @@ class _ChatPanelState extends State<ChatPanel> {
               : ListView.builder(
                   controller: _scrollController,
                   padding: const EdgeInsets.symmetric(
-                      vertical: 16, horizontal: 12),
+                    vertical: 16,
+                    horizontal: 12,
+                  ),
                   itemCount: state.messages.length,
                   itemBuilder: (context, index) =>
                       MessageBubble(message: state.messages[index]),
@@ -125,7 +129,9 @@ class _ChatPanelState extends State<ChatPanel> {
                       borderSide: BorderSide(color: theme.dividerColor),
                     ),
                     contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     isDense: true,
                   ),
                   onSubmitted: (_) {
@@ -187,18 +193,21 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.travel_explore,
-                size: 52, color: theme.colorScheme.primary.withAlpha(128)),
+            Icon(
+              Icons.travel_explore,
+              size: 52,
+              color: theme.colorScheme.primary.withAlpha(128),
+            ),
             const SizedBox(height: 16),
             Text(
-              'Ask Claude about any place',
+              'Ask AI Provider about any place',
               style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.onSurface.withAlpha(153),
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              '"Show me the Eiffel Tower"\n"Route from Tokyo to Kyoto"\n"Highlight Central Park"',
+              '"Show me the Tokyo Tower"\n"Route from Tokyo Station to Shinjuku Station"\n"Highlight Ueno Park"',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurface.withAlpha(102),
