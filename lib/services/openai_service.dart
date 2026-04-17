@@ -3,19 +3,24 @@ import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../models/map_config.dart';
 import 'ai_service.dart';
+import 'mcp_service.dart';
 
 class OpenAiService implements AiService {
   static const _apiUrl = 'https://api.openai.com/v1/chat/completions';
   static const _model = 'gpt-4o';
   static const String _apiKey = AppConfig.openAiApiKey;
 
+  final McpService? _mcp;
   final List<Map<String, dynamic>> _history = [];
+
+  OpenAiService({McpService? mcp}) : _mcp = mcp;
 
   static const _systemPrompt =
       'You are a geography and map assistant. When the user asks about a place, '
-      'location, route, or geographic topic, ALWAYS call the show_map function to '
-      'update the map panel. After calling the function, provide a helpful and '
-      'concise explanation of the location. Use accurate coordinates. '
+      'location, route, or geographic topic, use any available geolocation tools '
+      '(e.g. geocode, route_search) to look up accurate coordinates first, then '
+      'ALWAYS call the show_map function to update the map panel. After showing '
+      'the map, provide a helpful and concise explanation. '
       'For cities, use zoom 10-12. For streets/buildings, use zoom 15-18. '
       'For countries/continents, use zoom 4-7. Always show the map first.';
 
@@ -107,6 +112,12 @@ class OpenAiService implements AiService {
     },
   };
 
+  /// Build the full tool list: show_map (local) + any MCP tools.
+  List<Map<String, dynamic>> _buildTools() => [
+        _showMapTool,
+        if (_mcp != null) ..._mcp.toOpenAiTools(),
+      ];
+
   @override
   Future<void> sendMessage({
     required String userText,
@@ -118,52 +129,61 @@ class OpenAiService implements AiService {
     _history.add({'role': 'user', 'content': userText});
 
     try {
-      final responseBody = await _callApi();
-      final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
-      final choice = (decoded['choices'] as List).first as Map<String, dynamic>;
-      final message = choice['message'] as Map<String, dynamic>;
-      final finishReason = choice['finish_reason'] as String;
+      final tools = _buildTools();
+      String textAccumulator = '';
 
-      String textAccumulator = message['content'] as String? ?? '';
-      final toolCalls = message['tool_calls'] as List?;
+      // Loop until GPT stops requesting tool calls.
+      // This supports multi-step flows such as:
+      //   1. GPT calls geocode (MCP) → gets coordinates
+      //   2. GPT calls show_map (local) → map updates
+      //   3. GPT returns final text → done
+      while (true) {
+        final responseBody = await _callApi(tools);
+        final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
+        final choice =
+            (decoded['choices'] as List).first as Map<String, dynamic>;
+        final message = choice['message'] as Map<String, dynamic>;
+        final finishReason = choice['finish_reason'] as String;
 
-      // Append assistant message to history (message already contains role/content/tool_calls)
-      _history.add(message);
+        textAccumulator += message['content'] as String? ?? '';
 
-      if (finishReason == 'tool_calls' && toolCalls != null) {
+        // Append assistant message (includes tool_calls if present)
+        _history.add(message);
+
+        if (finishReason != 'tool_calls') break;
+
+        // Dispatch every tool call in this turn
+        final toolCalls = (message['tool_calls'] as List?) ?? [];
         for (final toolCall in toolCalls) {
           final tc = toolCall as Map<String, dynamic>;
           final fn = tc['function'] as Map<String, dynamic>;
+          final name = fn['name'] as String;
+          // OpenAI returns arguments as a JSON string — decode it
+          final toolInput =
+              jsonDecode(fn['arguments'] as String) as Map<String, dynamic>;
+          final toolCallId = tc['id'] as String;
 
-          if (fn['name'] == 'show_map') {
-            // OpenAI returns arguments as a JSON string — decode it
-            final toolInput =
-                jsonDecode(fn['arguments'] as String) as Map<String, dynamic>;
-            final toolCallId = tc['id'] as String;
-
+          final String result;
+          if (name == 'show_map') {
+            // Local tool — update the map UI directly
             final mapConfig = MapConfig.fromToolInput(toolInput);
             onMap(mapConfig);
-
-            // Send tool result back with role: "tool"
-            _history.add({
-              'role': 'tool',
-              'tool_call_id': toolCallId,
-              'content':
-                  'Map updated to show: ${mapConfig.title ?? "the requested location"}',
-            });
+            result =
+                'Map updated to show: ${mapConfig.title ?? "the requested location"}';
+          } else if (_mcp != null && _mcp.hasTool(name)) {
+            // MCP tool — forward to the MCP server
+            result = await _mcp.callTool(name, toolInput);
+          } else {
+            result = 'Tool "$name" is not available.';
           }
+
+          // OpenAI expects role: "tool" with matching tool_call_id
+          _history.add({
+            'role': 'tool',
+            'tool_call_id': toolCallId,
+            'content': result,
+          });
         }
-
-        // Second call to get the text response after tool execution
-        final responseBody2 = await _callApi();
-        final decoded2 =
-            jsonDecode(responseBody2) as Map<String, dynamic>;
-        final choice2 =
-            (decoded2['choices'] as List).first as Map<String, dynamic>;
-        final message2 = choice2['message'] as Map<String, dynamic>;
-
-        textAccumulator += message2['content'] as String? ?? '';
-        _history.add(message2);
       }
 
       onText(textAccumulator.trim());
@@ -175,7 +195,7 @@ class OpenAiService implements AiService {
     }
   }
 
-  Future<String> _callApi() async {
+  Future<String> _callApi(List<Map<String, dynamic>> tools) async {
     final messages = [
       {'role': 'system', 'content': _systemPrompt},
       ..._history,
@@ -184,7 +204,7 @@ class OpenAiService implements AiService {
     final body = jsonEncode({
       'model': _model,
       'max_tokens': 4096,
-      'tools': [_showMapTool],
+      'tools': tools,
       'messages': messages,
     });
 

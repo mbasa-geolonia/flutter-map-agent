@@ -3,19 +3,24 @@ import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../models/map_config.dart';
 import 'ai_service.dart';
+import 'mcp_service.dart';
 
 class ClaudeService implements AiService {
   static const _apiUrl = 'https://api.anthropic.com/v1/messages';
   static const _model = 'claude-opus-4-6';
   static const String _apiKey = AppConfig.anthropicApiKey;
 
+  final McpService? _mcp;
   final List<Map<String, dynamic>> _history = [];
+
+  ClaudeService({McpService? mcp}) : _mcp = mcp;
 
   static const _systemPrompt =
       'You are a geography and map assistant. When the user asks about a place, '
-      'location, route, or geographic topic, ALWAYS call the show_map tool to '
-      'update the map panel. After calling the tool, provide a helpful and '
-      'concise explanation of the location. Use accurate coordinates. '
+      'location, route, or geographic topic, use any available geolocation tools '
+      '(e.g. geocode, route_search) to look up accurate coordinates first, then '
+      'ALWAYS call the show_map tool to update the map panel. After showing the '
+      'map, provide a helpful and concise explanation. '
       'For cities, use zoom 10-12. For streets/buildings, use zoom 15-18. '
       'For countries/continents, use zoom 4-7. Always show the map first.';
 
@@ -103,6 +108,12 @@ class ClaudeService implements AiService {
     },
   };
 
+  /// Build the full tool list: show_map (local) + any MCP tools.
+  List<Map<String, dynamic>> _buildTools() => [
+        _showMapTool,
+        if (_mcp != null) ..._mcp.toClaudeTools(),
+      ];
+
   @override
   Future<void> sendMessage({
     required String userText,
@@ -114,57 +125,62 @@ class ClaudeService implements AiService {
     _history.add({'role': 'user', 'content': userText});
 
     try {
-      final responseBody = await _callApi();
-      final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
-      final stopReason = decoded['stop_reason'] as String;
-      final content = decoded['content'] as List;
-
+      final tools = _buildTools();
       String textAccumulator = '';
-      Map<String, dynamic>? toolUseBlock;
 
-      for (final block in content) {
-        final b = block as Map<String, dynamic>;
-        if (b['type'] == 'text') {
-          textAccumulator += b['text'] as String;
-        } else if (b['type'] == 'tool_use' && b['name'] == 'show_map') {
-          toolUseBlock = b;
-        }
-      }
+      // Loop until Claude stops requesting tool calls.
+      // This supports multi-step flows such as:
+      //   1. Claude calls geocode (MCP) → gets coordinates
+      //   2. Claude calls show_map (local) → map updates
+      //   3. Claude returns final text → done
+      while (true) {
+        final responseBody = await _callApi(tools);
+        final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
+        final stopReason = decoded['stop_reason'] as String;
+        final content = decoded['content'] as List;
 
-      // Append full content array to history (required by Anthropic API)
-      _history.add({'role': 'assistant', 'content': content});
-
-      if (stopReason == 'tool_use' && toolUseBlock != null) {
-        final toolInput = toolUseBlock['input'] as Map<String, dynamic>;
-        final toolUseId = toolUseBlock['id'] as String;
-
-        final mapConfig = MapConfig.fromToolInput(toolInput);
-        onMap(mapConfig);
-
-        // Send tool result back so Claude can produce the final text response
-        _history.add({
-          'role': 'user',
-          'content': [
-            {
-              'type': 'tool_result',
-              'tool_use_id': toolUseId,
-              'content':
-                  'Map updated to show: ${mapConfig.title ?? "the requested location"}',
-            }
-          ],
-        });
-
-        final responseBody2 = await _callApi();
-        final decoded2 = jsonDecode(responseBody2) as Map<String, dynamic>;
-        final content2 = decoded2['content'] as List;
-
-        for (final block in content2) {
+        for (final block in content) {
           final b = block as Map<String, dynamic>;
-          if (b['type'] == 'text') {
-            textAccumulator += b['text'] as String;
-          }
+          if (b['type'] == 'text') textAccumulator += b['text'] as String;
         }
-        _history.add({'role': 'assistant', 'content': content2});
+
+        // Anthropic requires the full content array to be appended as-is
+        _history.add({'role': 'assistant', 'content': content});
+
+        if (stopReason != 'tool_use') break;
+
+        // Dispatch every tool_use block in this turn
+        final toolResults = <Map<String, dynamic>>[];
+        for (final block in content) {
+          final b = block as Map<String, dynamic>;
+          if (b['type'] != 'tool_use') continue;
+
+          final name = b['name'] as String;
+          final input = b['input'] as Map<String, dynamic>;
+          final id = b['id'] as String;
+
+          final String result;
+          if (name == 'show_map') {
+            // Local tool — update the map UI directly
+            final mapConfig = MapConfig.fromToolInput(input);
+            onMap(mapConfig);
+            result =
+                'Map updated to show: ${mapConfig.title ?? "the requested location"}';
+          } else if (_mcp != null && _mcp.hasTool(name)) {
+            // MCP tool — forward to the MCP server
+            result = await _mcp.callTool(name, input);
+          } else {
+            result = 'Tool "$name" is not available.';
+          }
+
+          toolResults.add({
+            'type': 'tool_result',
+            'tool_use_id': id,
+            'content': result,
+          });
+        }
+
+        _history.add({'role': 'user', 'content': toolResults});
       }
 
       onText(textAccumulator.trim());
@@ -176,12 +192,12 @@ class ClaudeService implements AiService {
     }
   }
 
-  Future<String> _callApi() async {
+  Future<String> _callApi(List<Map<String, dynamic>> tools) async {
     final body = jsonEncode({
       'model': _model,
       'max_tokens': 4096,
       'system': _systemPrompt,
-      'tools': [_showMapTool],
+      'tools': tools,
       'messages': _history,
     });
 

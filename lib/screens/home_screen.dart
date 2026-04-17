@@ -1,9 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/message.dart';
 import '../models/map_config.dart';
 import '../services/ai_service.dart';
 import '../services/claude_service.dart';
+import '../services/mcp_service.dart';
 import '../services/openai_service.dart';
 import '../widgets/chat_panel.dart';
 import '../widgets/map_panel.dart';
@@ -12,21 +14,51 @@ enum AiProvider { claude, openAi }
 
 class AppState extends ChangeNotifier {
   AiProvider _aiProvider = AiProvider.openAi;
-  AiService _service = OpenAiService();
+  McpService? _mcp;
+  late AiService _service;
 
   final List<ChatMessage> messages = [];
   MapConfig mapConfig = MapConfig.defaultConfig;
   bool isLoading = false;
+
+  /// True once the MCP server has been reached and its tools loaded.
+  bool mcpReady = false;
+
+  AppState() {
+    // Start without MCP so the app is immediately usable
+    _service = OpenAiService();
+    // Attempt to connect to the MCP server in the background
+    _initMcp();
+  }
+
+  /// Connects to the MCP server asynchronously.
+  /// On success, recreates the active service so MCP tools are available.
+  /// On failure, the app continues to work without MCP (graceful degradation).
+  Future<void> _initMcp() async {
+    final mcp = McpService(serverUrl: 'http://localhost:8888/mcp');
+    try {
+      await mcp.initialize();
+      _mcp = mcp;
+      mcpReady = true;
+      // Recreate the active service so it picks up the MCP tool list
+      _service = _buildService(_aiProvider);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[MCP] Unavailable – running without MCP tools: $e');
+    }
+  }
+
+  AiService _buildService(AiProvider provider) => switch (provider) {
+        AiProvider.claude => ClaudeService(mcp: _mcp),
+        AiProvider.openAi => OpenAiService(mcp: _mcp),
+      };
 
   AiProvider get aiProvider => _aiProvider;
 
   void switchProvider(AiProvider provider) {
     if (provider == _aiProvider) return;
     _aiProvider = provider;
-    _service = switch (provider) {
-      AiProvider.claude => ClaudeService(),
-      AiProvider.openAi => OpenAiService(),
-    };
+    _service = _buildService(provider);
     messages.clear();
     mapConfig = MapConfig.defaultConfig;
     notifyListeners();
@@ -162,6 +194,25 @@ class _HomeBodyState extends State<_HomeBody> {
                     visualDensity: VisualDensity.compact,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
+                ),
+                const Spacer(),
+                // MCP connection status indicator
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.circle,
+                      size: 8,
+                      color: state.mcpReady ? Colors.green : Colors.grey,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      state.mcpReady ? 'MCP connected' : 'MCP offline',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: state.mcpReady ? Colors.green : Colors.grey,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
