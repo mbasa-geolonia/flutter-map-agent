@@ -54,14 +54,10 @@ class MapPolygon {
   /// Fill color as hex, e.g. `"#FF9800"`.
   final String? fillColor;
 
-  /// Border color as hex. Defaults to a darker shade of [fillColor] if omitted.
-  final String? strokeColor;
-
   const MapPolygon({
     required this.points,
     this.label,
     this.fillColor,
-    this.strokeColor,
   });
 
   factory MapPolygon.fromJson(Map<String, dynamic> json) {
@@ -72,17 +68,12 @@ class MapPolygon {
       points: pts,
       label: json['label'] as String?,
       fillColor: json['fill_color'] as String?,
-      strokeColor: json['stroke_color'] as String?,
     );
   }
 
   /// Fill with 47% opacity (alpha 120/255).
   Color get resolvedFillColor =>
       hexToColor(fillColor, const Color(0xFFFF9800)).withAlpha(120);
-
-  /// Stroke defaults to fill color at full opacity.
-  Color get resolvedStrokeColor =>
-      hexToColor(strokeColor ?? fillColor, const Color(0xFFE65100));
 }
 
 class MapCircle {

@@ -99,11 +99,6 @@ class OpenAiService implements AiService {
                       'Fill color as #RRGGBB hex (e.g. "#FF9800"). '
                       'A semi-transparent fill is applied automatically.',
                 },
-                'stroke_color': {
-                  'type': 'string',
-                  'description':
-                      'Border color as #RRGGBB hex. Defaults to fill_color if omitted.',
-                },
               },
               'required': ['points'],
             },
