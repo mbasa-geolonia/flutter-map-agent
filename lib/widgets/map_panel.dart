@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+
 import '../config/app_config.dart';
 import '../models/map_config.dart';
 import '../screens/home_screen.dart';
@@ -76,14 +77,15 @@ class _MapPanelState extends State<MapPanel> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
             color: theme.colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(color: theme.dividerColor),
-            ),
+            border: Border(bottom: BorderSide(color: theme.dividerColor)),
           ),
           child: Row(
             children: [
-              Icon(Icons.map_outlined,
-                  color: theme.colorScheme.primary, size: 22),
+              Icon(
+                Icons.map_outlined,
+                color: theme.colorScheme.primary,
+                size: 22,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -96,37 +98,40 @@ class _MapPanelState extends State<MapPanel> {
               ),
               if (config.markers.isNotEmpty) ...[
                 Chip(
-                  label: Text('${config.markers.length} marker'
-                      '${config.markers.length == 1 ? '' : 's'}'),
+                  label: Text(
+                    '${config.markers.length} marker'
+                    '${config.markers.length == 1 ? '' : 's'}',
+                  ),
                   avatar: const Icon(Icons.place, size: 14),
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
-                  labelPadding:
-                      const EdgeInsets.symmetric(horizontal: 4),
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 4),
                 ),
                 const SizedBox(width: 6),
               ],
               if (config.routes.isNotEmpty) ...[
                 Chip(
-                  label: Text('${config.routes.length} route'
-                      '${config.routes.length == 1 ? '' : 's'}'),
+                  label: Text(
+                    '${config.routes.length} route'
+                    '${config.routes.length == 1 ? '' : 's'}',
+                  ),
                   avatar: const Icon(Icons.route, size: 14),
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
-                  labelPadding:
-                      const EdgeInsets.symmetric(horizontal: 4),
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 4),
                 ),
                 const SizedBox(width: 6),
               ],
               if (config.circles.isNotEmpty) ...[
                 Chip(
-                  label: Text('${config.circles.length} circle'
-                      '${config.circles.length == 1 ? '' : 's'}'),
+                  label: Text(
+                    '${config.circles.length} circle'
+                    '${config.circles.length == 1 ? '' : 's'}',
+                  ),
                   avatar: const Icon(Icons.circle_outlined, size: 14),
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
-                  labelPadding:
-                      const EdgeInsets.symmetric(horizontal: 4),
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 4),
                 ),
                 const SizedBox(width: 6),
               ],
@@ -137,11 +142,15 @@ class _MapPanelState extends State<MapPanel> {
                   isDense: true,
                   borderRadius: BorderRadius.circular(8),
                   items: MapStyle.values
-                      .map((s) => DropdownMenuItem(
-                            value: s,
-                            child: Text(s.label,
-                                style: const TextStyle(fontSize: 13)),
-                          ))
+                      .map(
+                        (s) => DropdownMenuItem(
+                          value: s,
+                          child: Text(
+                            s.label,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      )
                       .toList(),
                   onChanged: (s) {
                     if (s != null) setState(() => _mapStyle = s);
@@ -156,8 +165,7 @@ class _MapPanelState extends State<MapPanel> {
           child: FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter:
-                  LatLng(config.centerLat, config.centerLng),
+              initialCenter: LatLng(config.centerLat, config.centerLng),
               initialZoom: config.zoom,
               minZoom: 2,
               maxZoom: 19,
@@ -177,9 +185,9 @@ class _MapPanelState extends State<MapPanel> {
                           point: c.latLng,
                           radius: c.radiusMeters,
                           useRadiusInMeter: true,
-                          color: Colors.blue.withAlpha(50),
-                          borderColor: Colors.blue,
-                          borderStrokeWidth: 2,
+                          color: Colors.redAccent.withAlpha(50),
+                          borderColor: Colors.red,
+                          borderStrokeWidth: 1.5,
                         ),
                       )
                       .toList(),
@@ -189,9 +197,7 @@ class _MapPanelState extends State<MapPanel> {
                   polygons: config.polygons
                       .map(
                         (poly) => Polygon(
-                          points: poly.points
-                              .map((p) => p.latLng)
-                              .toList(),
+                          points: poly.points.map((p) => p.latLng).toList(),
                           color: Colors.orange.withAlpha(120),
                           borderColor: Colors.deepOrange,
                           borderStrokeWidth: 3,
@@ -205,9 +211,7 @@ class _MapPanelState extends State<MapPanel> {
                   polylines: config.routes
                       .map(
                         (route) => Polyline(
-                          points: route
-                              .map((p) => p.latLng)
-                              .toList(),
+                          points: route.map((p) => p.latLng).toList(),
                           strokeWidth: 4,
                           color: Colors.deepOrange,
                         ),
@@ -230,10 +234,7 @@ class _MapPanelState extends State<MapPanel> {
                 ),
               const RichAttributionWidget(
                 attributions: [
-                  TextSourceAttribution(
-                    'MapFan',
-                    prependCopyright: true,
-                  ),
+                  TextSourceAttribution('MapFan', prependCopyright: true),
                 ],
               ),
             ],
@@ -255,8 +256,7 @@ class _MarkerWidget extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(6),
