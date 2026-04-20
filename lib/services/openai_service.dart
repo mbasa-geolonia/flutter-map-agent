@@ -106,6 +106,32 @@ class OpenAiService implements AiService {
               },
             },
           },
+          'circles': {
+            'type': 'array',
+            'description': 'Radius circles for showing coverage or proximity areas',
+            'items': {
+              'type': 'object',
+              'properties': {
+                'lat': {
+                  'type': 'number',
+                  'description': 'Center latitude of the circle',
+                },
+                'lng': {
+                  'type': 'number',
+                  'description': 'Center longitude of the circle',
+                },
+                'radius_m': {
+                  'type': 'number',
+                  'description': 'Radius in meters (e.g. 500 for 500 m)',
+                },
+                'label': {
+                  'type': 'string',
+                  'description': 'Optional label for the circle',
+                },
+              },
+              'required': ['lat', 'lng', 'radius_m'],
+            },
+          },
         },
         'required': ['center_lat', 'center_lng'],
       },

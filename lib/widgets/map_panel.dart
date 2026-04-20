@@ -118,6 +118,18 @@ class _MapPanelState extends State<MapPanel> {
                 ),
                 const SizedBox(width: 6),
               ],
+              if (config.circles.isNotEmpty) ...[
+                Chip(
+                  label: Text('${config.circles.length} circle'
+                      '${config.circles.length == 1 ? '' : 's'}'),
+                  avatar: const Icon(Icons.circle_outlined, size: 14),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  labelPadding:
+                      const EdgeInsets.symmetric(horizontal: 4),
+                ),
+                const SizedBox(width: 6),
+              ],
               // Map style selector
               DropdownButtonHideUnderline(
                 child: DropdownButton<MapStyle>(
@@ -157,6 +169,21 @@ class _MapPanelState extends State<MapPanel> {
                 userAgentPackageName: 'com.example.flutter_map_agent',
                 maxNativeZoom: 19,
               ),
+              if (config.circles.isNotEmpty)
+                CircleLayer(
+                  circles: config.circles
+                      .map(
+                        (c) => CircleMarker(
+                          point: c.latLng,
+                          radius: c.radiusMeters,
+                          useRadiusInMeter: true,
+                          color: Colors.blue.withAlpha(50),
+                          borderColor: Colors.blue,
+                          borderStrokeWidth: 2,
+                        ),
+                      )
+                      .toList(),
+                ),
               if (config.polygons.isNotEmpty)
                 PolygonLayer(
                   polygons: config.polygons
