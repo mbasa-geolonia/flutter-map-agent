@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../config/app_config.dart';
 import '../models/message.dart';
 import '../models/map_config.dart';
 import '../services/ai_service.dart';
@@ -34,7 +35,7 @@ class AppState extends ChangeNotifier {
   /// On success, recreates the active service so MCP tools are available.
   /// On failure, the app continues to work without MCP (graceful degradation).
   Future<void> _initMcp() async {
-    final mcp = McpService(serverUrl: 'http://localhost:8888/mcp');
+    final mcp = McpService(serverUrl: AppConfig.mcpServerUrl);
     try {
       await mcp.initialize();
       _mcp = mcp;
