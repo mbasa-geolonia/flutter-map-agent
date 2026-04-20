@@ -199,9 +199,36 @@ class _MapPanelState extends State<MapPanel> {
                         (poly) => Polygon(
                           points: poly.points.map((p) => p.latLng).toList(),
                           color: poly.resolvedFillColor,
-                          borderColor: poly.resolvedStrokeColor,
-                          borderStrokeWidth: 3,
+                          borderColor: Colors.black12,
+                          borderStrokeWidth: 1.5,
                           label: poly.label,
+                          labelStyle: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 11.8,
+                            shadows: [
+                              // Create a 360-degree halo effect using 4-8 shadows
+                              Shadow(
+                                blurRadius: 2.0,
+                                color: Colors.white,
+                                offset: Offset(1.0, 1.0),
+                              ),
+                              Shadow(
+                                blurRadius: 2.0,
+                                color: Colors.white,
+                                offset: Offset(-1.0, 1.0),
+                              ),
+                              Shadow(
+                                blurRadius: 2.0,
+                                color: Colors.white,
+                                offset: Offset(1.0, -1.0),
+                              ),
+                              Shadow(
+                                blurRadius: 2.0,
+                                color: Colors.white,
+                                offset: Offset(-1.0, -1.0),
+                              ),
+                            ],
+                          ),
                         ),
                       )
                       .toList(),
@@ -227,7 +254,10 @@ class _MapPanelState extends State<MapPanel> {
                           width: 130,
                           height: 60,
                           alignment: Alignment.topCenter,
-                          child: _MarkerWidget(label: m.label, color: m.pinColor),
+                          child: _MarkerWidget(
+                            label: m.label,
+                            color: m.pinColor,
+                          ),
                         ),
                       )
                       .toList(),
