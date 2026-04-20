@@ -65,6 +65,12 @@ class OpenAiService implements AiService {
                   'type': 'string',
                   'description': 'Text label shown on the pin',
                 },
+                'color': {
+                  'type': 'string',
+                  'description':
+                      'Pin color as #RRGGBB hex (e.g. "#E53935"). '
+                      'Use consistent colors per category for thematic maps.',
+                },
               },
               'required': ['lat', 'lng', 'label'],
             },
@@ -87,6 +93,17 @@ class OpenAiService implements AiService {
                   },
                 },
                 'label': {'type': 'string'},
+                'fill_color': {
+                  'type': 'string',
+                  'description':
+                      'Fill color as #RRGGBB hex (e.g. "#FF9800"). '
+                      'A semi-transparent fill is applied automatically.',
+                },
+                'stroke_color': {
+                  'type': 'string',
+                  'description':
+                      'Border color as #RRGGBB hex. Defaults to fill_color if omitted.',
+                },
               },
               'required': ['points'],
             },
@@ -95,15 +112,26 @@ class OpenAiService implements AiService {
             'type': 'array',
             'description': 'Polyline paths or routes between locations',
             'items': {
-              'type': 'array',
-              'items': {
-                'type': 'object',
-                'properties': {
-                  'lat': {'type': 'number'},
-                  'lng': {'type': 'number'},
+              'type': 'object',
+              'properties': {
+                'points': {
+                  'type': 'array',
+                  'items': {
+                    'type': 'object',
+                    'properties': {
+                      'lat': {'type': 'number'},
+                      'lng': {'type': 'number'},
+                    },
+                    'required': ['lat', 'lng'],
+                  },
                 },
-                'required': ['lat', 'lng'],
+                'color': {
+                  'type': 'string',
+                  'description':
+                      'Route stroke color as #RRGGBB hex (e.g. "#43A047").',
+                },
               },
+              'required': ['points'],
             },
           },
           'circles': {
@@ -127,6 +155,17 @@ class OpenAiService implements AiService {
                 'label': {
                   'type': 'string',
                   'description': 'Optional label for the circle',
+                },
+                'fill_color': {
+                  'type': 'string',
+                  'description':
+                      'Fill color as #RRGGBB hex (e.g. "#1E88E5"). '
+                      'A semi-transparent fill is applied automatically.',
+                },
+                'stroke_color': {
+                  'type': 'string',
+                  'description':
+                      'Border color as #RRGGBB hex. Defaults to fill_color if omitted.',
                 },
               },
               'required': ['lat', 'lng', 'radius_m'],

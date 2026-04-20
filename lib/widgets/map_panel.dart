@@ -185,8 +185,8 @@ class _MapPanelState extends State<MapPanel> {
                           point: c.latLng,
                           radius: c.radiusMeters,
                           useRadiusInMeter: true,
-                          color: Colors.redAccent.withAlpha(50),
-                          borderColor: Colors.red,
+                          color: c.resolvedFillColor,
+                          borderColor: c.resolvedStrokeColor,
                           borderStrokeWidth: 1.5,
                         ),
                       )
@@ -198,8 +198,8 @@ class _MapPanelState extends State<MapPanel> {
                       .map(
                         (poly) => Polygon(
                           points: poly.points.map((p) => p.latLng).toList(),
-                          color: Colors.orange.withAlpha(120),
-                          borderColor: Colors.deepOrange,
+                          color: poly.resolvedFillColor,
+                          borderColor: poly.resolvedStrokeColor,
                           borderStrokeWidth: 3,
                           label: poly.label,
                         ),
@@ -211,9 +211,9 @@ class _MapPanelState extends State<MapPanel> {
                   polylines: config.routes
                       .map(
                         (route) => Polyline(
-                          points: route.map((p) => p.latLng).toList(),
+                          points: route.points.map((p) => p.latLng).toList(),
                           strokeWidth: 4,
-                          color: Colors.deepOrange,
+                          color: route.resolvedColor,
                         ),
                       )
                       .toList(),
@@ -227,7 +227,7 @@ class _MapPanelState extends State<MapPanel> {
                           width: 130,
                           height: 60,
                           alignment: Alignment.topCenter,
-                          child: _MarkerWidget(label: m.label),
+                          child: _MarkerWidget(label: m.label, color: m.pinColor),
                         ),
                       )
                       .toList(),
@@ -247,8 +247,9 @@ class _MapPanelState extends State<MapPanel> {
 
 class _MarkerWidget extends StatelessWidget {
   final String label;
+  final Color color;
 
-  const _MarkerWidget({required this.label});
+  const _MarkerWidget({required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -260,6 +261,7 @@ class _MarkerWidget extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: color.withAlpha(80), width: 1),
             boxShadow: const [
               BoxShadow(
                 blurRadius: 6,
@@ -278,7 +280,7 @@ class _MarkerWidget extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        const Icon(Icons.location_pin, color: Colors.red, size: 30),
+        Icon(Icons.location_pin, color: color, size: 30),
       ],
     );
   }
