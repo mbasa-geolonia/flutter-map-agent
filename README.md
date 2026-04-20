@@ -14,8 +14,13 @@ The follwing API KEYS will be needed:
 * Anthropic API Key to connect to Claude
 * OpenAPI API Key to connect to ChatGPT
 
+The URL of a Model Context Protocol(MCP) Service is required.
+
 ### To Build
 
-Create a `lib/config/app_config.dart` based on the app_config.dart.sample and place the required
-API KEYS.
+* Create a `lib/config/app_config.dart` based on the app_config.dart.sample and place the required
+API KEYS as well as the MCP URL.
 
+* Issue the following command to create and run a MacOS Desktop binary: 
+
+    ```flutter run -d macos ```
