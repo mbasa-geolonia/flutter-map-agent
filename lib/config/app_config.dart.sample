@@ -10,4 +10,7 @@ abstract final class AppConfig {
   /// MapFan tile API key.
   static const String mapfanApiKey =
       'MAPFAN_API_KEY';
+
+  /// MCP server URL (Streamable HTTP transport).
+  static const String mcpServerUrl = 'http://localhost:8888/mcp';
 }
