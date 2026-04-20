@@ -239,7 +239,7 @@ class _MapPanelState extends State<MapPanel> {
                       .map(
                         (route) => Polyline(
                           points: route.points.map((p) => p.latLng).toList(),
-                          strokeWidth: 4,
+                          strokeWidth: 6,
                           color: route.resolvedColor,
                         ),
                       )
