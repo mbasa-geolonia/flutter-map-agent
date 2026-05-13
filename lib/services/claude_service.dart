@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
@@ -19,10 +20,15 @@ class ClaudeService implements AiService {
       'You are a geography and map assistant. When the user asks about a place, '
       'location, route, or geographic topic, use any available geolocation tools '
       '(e.g. geocode, route_search) to look up accurate coordinates first, then '
-      'ALWAYS call the show_map tool to update the map panel. After showing the '
+      'call the show_map tool to update the map panel. After showing the '
       'map, provide a helpful and concise explanation. '
       'For cities, use zoom 10-12. For streets/buildings, use zoom 15-18. '
-      'For countries/continents, use zoom 4-7. Always show the map first.';
+      'For countries/continents, use zoom 4-7. Always show the map first. '
+      'When a tool result says "GeoJSON result rendered on map", the geometry '
+      'is already displayed with default colors. You may call show_map once '
+      'to add markers or set polygon_fill_color — do NOT include a polygons '
+      'or routes array, as the coordinates are already rendered and will be '
+      'preserved automatically.';
 
   static const _showMapTool = {
     'name': 'show_map',
@@ -96,6 +102,13 @@ class ClaudeService implements AiService {
                     'Fill color as #RRGGBB hex (e.g. "#FF9800"). '
                     'A semi-transparent fill is applied automatically.',
               },
+              'popup_info': {
+                'type': 'string',
+                'description':
+                    'Informational text shown in a popup when the user taps '
+                    'this polygon. Include relevant details such as area name, '
+                    'statistics, descriptions, or any other useful information.',
+              },
             },
             'required': ['points'],
           },
@@ -163,6 +176,15 @@ class ClaudeService implements AiService {
             'required': ['lat', 'lng', 'radius_m'],
           },
         },
+        'polygon_fill_color': {
+          'type': 'string',
+          'description':
+              'Override the fill color of ALL polygons already on the map, '
+              'including any auto-rendered GeoJSON isochrones or areas. '
+              'Use this when the user requests a specific color for an area '
+              'that was drawn by a previous tool call. Value is #RRGGBB hex '
+              '(e.g. "#43A047" for green).',
+        },
       },
       'required': ['center_lat', 'center_lng'],
     },
@@ -187,6 +209,15 @@ class ClaudeService implements AiService {
     try {
       final tools = _buildTools();
       String textAccumulator = '';
+
+      // Tracks GeoJSON-rendered map state so subsequent show_map calls
+      // (e.g. adding Start/End markers) merge with existing routes/polygons
+      // rather than replacing them.
+      MapConfig? accumulatedMapConfig;
+      // Number of polygons/routes added by the most recent GeoJSON render.
+      // polygon_fill_color applies only to these, not all accumulated features.
+      int lastGeoJsonPolygonCount = 0;
+      int lastGeoJsonRouteCount = 0;
 
       // Loop until Claude stops requesting tool calls.
       // This supports multi-step flows such as:
@@ -221,14 +252,132 @@ class ClaudeService implements AiService {
 
           final String result;
           if (name == 'show_map') {
-            // Local tool — update the map UI directly
-            final mapConfig = MapConfig.fromToolInput(input);
+            // Local tool — update the map UI directly.
+            // Merge with any previously GeoJSON-rendered features so that
+            // routes/polygons aren't wiped when Claude adds markers on top.
+            // polygon_fill_color applies only to the polygons/routes added by
+            // the most recent GeoJSON render, not all accumulated features.
+            final fromTool = MapConfig.fromToolInput(input);
+            final polygonFillOverride =
+                input['polygon_fill_color'] as String?;
+            final MapConfig mapConfig;
+            if (accumulatedMapConfig == null) {
+              mapConfig = fromTool;
+            } else {
+              List<MapPolygon> mergedPolygons;
+              if (polygonFillOverride != null && lastGeoJsonPolygonCount > 0) {
+                final total = accumulatedMapConfig.polygons.length;
+                final splitAt = (total - lastGeoJsonPolygonCount).clamp(0, total);
+                mergedPolygons = [
+                  ...accumulatedMapConfig.polygons.sublist(0, splitAt),
+                  ...accumulatedMapConfig.polygons.sublist(splitAt).map((p) =>
+                      MapPolygon(
+                        points: p.points,
+                        label: p.label,
+                        fillColor: polygonFillOverride,
+                        popupInfo: p.popupInfo,
+                      )),
+                  ...fromTool.polygons,
+                ];
+              } else {
+                mergedPolygons = [
+                  ...accumulatedMapConfig.polygons,
+                  ...fromTool.polygons,
+                ];
+              }
+              mapConfig = MapConfig(
+                centerLat: fromTool.centerLat,
+                centerLng: fromTool.centerLng,
+                zoom: fromTool.zoom,
+                title: fromTool.title ?? accumulatedMapConfig.title,
+                markers: [
+                  ...accumulatedMapConfig.markers,
+                  ...fromTool.markers,
+                ],
+                routes: [
+                  ...accumulatedMapConfig.routes,
+                  ...fromTool.routes,
+                ],
+                polygons: mergedPolygons,
+                circles: [
+                  ...accumulatedMapConfig.circles,
+                  ...fromTool.circles,
+                ],
+              );
+            }
+            // Consume the last-GeoJSON counts so a second show_map call
+            // in the same turn doesn't re-apply the color override.
+            lastGeoJsonPolygonCount = 0;
+            lastGeoJsonRouteCount = 0;
+            accumulatedMapConfig = mapConfig;
             onMap(mapConfig);
             result =
                 'Map updated to show: ${mapConfig.title ?? "the requested location"}';
           } else if (_mcp != null && _mcp.hasTool(name)) {
             // MCP tool — forward to the MCP server
-            result = await _mcp.callTool(name, input);
+            final rawResult = await _mcp.callTool(name, input);
+
+            // If the MCP result is GeoJSON, render it directly rather than
+            // asking Claude to re-emit thousands of coordinates.
+            String mcpResult = rawResult;
+            try {
+              final decoded = jsonDecode(rawResult);
+              if (decoded is Map<String, dynamic> &&
+                  MapConfig.isGeoJson(decoded)) {
+                final mapConfig = MapConfig.fromGeoJson(
+                  decoded,
+                  title: name.replaceAll('_', ' '),
+                  paletteOffset: (accumulatedMapConfig?.routes.length ?? 0) +
+                      (accumulatedMapConfig?.polygons.length ?? 0),
+                );
+                final hasData = mapConfig.markers.isNotEmpty ||
+                    mapConfig.routes.isNotEmpty ||
+                    mapConfig.polygons.isNotEmpty;
+                if (hasData) {
+                  lastGeoJsonPolygonCount = mapConfig.polygons.length;
+                  lastGeoJsonRouteCount = mapConfig.routes.length;
+                  final merged = accumulatedMapConfig == null
+                      ? mapConfig
+                      : MapConfig(
+                          centerLat: mapConfig.centerLat,
+                          centerLng: mapConfig.centerLng,
+                          zoom: mapConfig.zoom,
+                          title: mapConfig.title ?? accumulatedMapConfig.title,
+                          markers: [
+                            ...accumulatedMapConfig.markers,
+                            ...mapConfig.markers,
+                          ],
+                          routes: [
+                            ...accumulatedMapConfig.routes,
+                            ...mapConfig.routes,
+                          ],
+                          polygons: [
+                            ...accumulatedMapConfig.polygons,
+                            ...mapConfig.polygons,
+                          ],
+                          circles: [
+                            ...accumulatedMapConfig.circles,
+                            ...mapConfig.circles,
+                          ],
+                        );
+                  accumulatedMapConfig = merged;
+                  onMap(merged);
+                  final newColors = mapConfig.polygons
+                      .map((p) => p.fillColor ?? 'default')
+                      .join(', ');
+                  mcpResult =
+                      'GeoJSON rendered: ${mapConfig.polygons.length} new '
+                      'polygon(s) with auto-assigned color(s): [$newColors]. '
+                      'Total on map: ${merged.polygons.length} polygon(s), '
+                      '${merged.routes.length} route(s). '
+                      'To change the color of these new polygon(s), call '
+                      'show_map with polygon_fill_color. To add markers, '
+                      'include them in show_map. '
+                      'Do NOT include polygon or route coordinates.';
+                }
+              }
+            } catch (_) {}
+            result = mcpResult;
           } else {
             result = 'Tool "$name" is not available.';
           }
@@ -247,6 +396,8 @@ class ClaudeService implements AiService {
       onDone();
     } on http.ClientException catch (e) {
       onError('Network error: ${e.message}');
+    } on TimeoutException {
+      onError('Request timed out. Please try again.');
     } catch (e) {
       onError('$e');
     }
@@ -255,21 +406,23 @@ class ClaudeService implements AiService {
   Future<String> _callApi(List<Map<String, dynamic>> tools) async {
     final body = jsonEncode({
       'model': _model,
-      'max_tokens': 4096,
+      'max_tokens': 8192,
       'system': _systemPrompt,
       'tools': tools,
       'messages': _history,
     });
 
-    final response = await http.post(
-      Uri.parse(_apiUrl),
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': _apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: body,
-    );
+    final response = await http
+        .post(
+          Uri.parse(_apiUrl),
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': _apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: body,
+        )
+        .timeout(const Duration(seconds: 120));
 
     if (response.statusCode != 200) {
       throw Exception('API error ${response.statusCode}: ${response.body}');

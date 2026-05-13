@@ -54,10 +54,14 @@ class MapPolygon {
   /// Fill color as hex, e.g. `"#FF9800"`.
   final String? fillColor;
 
+  /// Optional info text shown in a popup when the user taps this polygon.
+  final String? popupInfo;
+
   const MapPolygon({
     required this.points,
     this.label,
     this.fillColor,
+    this.popupInfo,
   });
 
   factory MapPolygon.fromJson(Map<String, dynamic> json) {
@@ -68,6 +72,7 @@ class MapPolygon {
       points: pts,
       label: json['label'] as String?,
       fillColor: json['fill_color'] as String?,
+      popupInfo: json['popup_info'] as String?,
     );
   }
 
@@ -168,6 +173,182 @@ class MapConfig {
     title: 'Tokyo',
   );
 
+  /// Returns true when [data] looks like a GeoJSON object.
+  static bool isGeoJson(Map<String, dynamic> data) {
+    const types = {
+      'FeatureCollection', 'Feature', 'Point', 'MultiPoint',
+      'LineString', 'MultiLineString', 'Polygon', 'MultiPolygon',
+      'GeometryCollection',
+    };
+    return types.contains(data['type']);
+  }
+
+  /// Parse a GeoJSON FeatureCollection (or single Feature/geometry) into a
+  /// [MapConfig].  GeoJSON coordinates are [longitude, latitude] — this
+  /// factory swaps them into the [lat, lng] convention used everywhere else.
+  factory MapConfig.fromGeoJson(
+    Map<String, dynamic> geojson, {
+    String? title,
+    double zoom = 13.0,
+    int paletteOffset = 0,
+  }) {
+    final markers = <MapMarker>[];
+    final routes = <MapRoute>[];
+    final polygons = <MapPolygon>[];
+
+    // Distinct colours for up to 8 separate features/paths.
+    const palette = [
+      '#E53935', '#1E88E5', '#43A047', '#FB8C00',
+      '#8E24AA', '#00ACC1', '#F4511E', '#6D4C41',
+    ];
+    int paletteIdx = paletteOffset;
+
+    List<Map<String, dynamic>> features = [];
+    if (geojson['type'] == 'FeatureCollection') {
+      features = (geojson['features'] as List).cast<Map<String, dynamic>>();
+    } else if (geojson['type'] == 'Feature') {
+      features = [geojson];
+    } else {
+      // Bare geometry object (e.g. {"type":"Point","coordinates":[...]}) —
+      // wrap it in a synthetic Feature so the loop below handles it uniformly.
+      features = [
+        {'type': 'Feature', 'geometry': geojson, 'properties': <String, dynamic>{}}
+      ];
+    }
+
+    for (final feature in features) {
+      final geometry = feature['geometry'] as Map<String, dynamic>?;
+      if (geometry == null) continue;
+
+      final props = (feature['properties'] as Map<String, dynamic>?) ?? {};
+      final propColor = props['color'] as String? ?? props['stroke'] as String?;
+      final label = [props['name'], props['label'], props['id']]
+          .whereType<Object>()
+          .map((e) => e.toString())
+          .firstWhere((_) => true, orElse: () => '');
+
+      final geomType = geometry['type'] as String?;
+
+      if (geomType == 'Point') {
+        final c = geometry['coordinates'] as List;
+        markers.add(MapMarker(
+          lat: (c[1] as num).toDouble(),
+          lng: (c[0] as num).toDouble(),
+          label: label,
+          color: propColor,
+        ));
+      } else if (geomType == 'LineString') {
+        final color = propColor ?? palette[paletteIdx++ % palette.length];
+        final coords = (geometry['coordinates'] as List).cast<List>();
+        if (coords.length >= 2) {
+          routes.add(MapRoute(
+            points: coords
+                .map((c) => MapMarker(
+                      lat: (c[1] as num).toDouble(),
+                      lng: (c[0] as num).toDouble(),
+                      label: '',
+                    ))
+                .toList(),
+            color: color,
+          ));
+        }
+      } else if (geomType == 'MultiLineString') {
+        // Each Feature gets one colour; its segments share that colour.
+        final color = propColor ?? palette[paletteIdx++ % palette.length];
+        final lines = (geometry['coordinates'] as List).cast<List>();
+        for (final line in lines) {
+          final coords = line.cast<List>();
+          if (coords.length >= 2) {
+            routes.add(MapRoute(
+              points: coords
+                  .map((c) => MapMarker(
+                        lat: (c[1] as num).toDouble(),
+                        lng: (c[0] as num).toDouble(),
+                        label: '',
+                      ))
+                  .toList(),
+              color: color,
+            ));
+          }
+        }
+      } else if (geomType == 'Polygon') {
+        final fillColor = props['fill'] as String? ??
+            palette[paletteIdx++ % palette.length];
+        final rings = (geometry['coordinates'] as List).cast<List>();
+        if (rings.isNotEmpty) {
+          final exterior = rings[0].cast<List>();
+          if (exterior.length >= 3) {
+            polygons.add(MapPolygon(
+              points: exterior
+                  .map((c) => MapMarker(
+                        lat: (c[1] as num).toDouble(),
+                        lng: (c[0] as num).toDouble(),
+                        label: '',
+                      ))
+                  .toList(),
+              label: label.isNotEmpty ? label : null,
+              fillColor: fillColor,
+            ));
+          }
+        }
+      } else if (geomType == 'MultiPolygon') {
+        final fillColor = props['fill'] as String? ??
+            palette[paletteIdx++ % palette.length];
+        for (final poly in (geometry['coordinates'] as List).cast<List>()) {
+          if (poly.isNotEmpty) {
+            final exterior = (poly[0] as List).cast<List>();
+            if (exterior.length >= 3) {
+              polygons.add(MapPolygon(
+                points: exterior
+                    .map((c) => MapMarker(
+                          lat: (c[1] as num).toDouble(),
+                          lng: (c[0] as num).toDouble(),
+                          label: '',
+                        ))
+                    .toList(),
+                label: label.isNotEmpty ? label : null,
+                fillColor: fillColor,
+              ));
+            }
+          }
+        }
+      }
+    }
+
+    // Derive map center from bounding box of all collected points.
+    final allLats = [
+      ...markers.map((m) => m.lat),
+      ...routes.expand((r) => r.points).map((p) => p.lat),
+      ...polygons.expand((p) => p.points).map((p) => p.lat),
+    ];
+    final allLngs = [
+      ...markers.map((m) => m.lng),
+      ...routes.expand((r) => r.points).map((p) => p.lng),
+      ...polygons.expand((p) => p.points).map((p) => p.lng),
+    ];
+
+    final centerLat = allLats.isNotEmpty
+        ? (allLats.reduce((a, b) => a < b ? a : b) +
+               allLats.reduce((a, b) => a > b ? a : b)) /
+              2
+        : 35.6762;
+    final centerLng = allLngs.isNotEmpty
+        ? (allLngs.reduce((a, b) => a < b ? a : b) +
+               allLngs.reduce((a, b) => a > b ? a : b)) /
+              2
+        : 139.6503;
+
+    return MapConfig(
+      centerLat: centerLat,
+      centerLng: centerLng,
+      zoom: zoom,
+      title: title,
+      markers: markers,
+      routes: routes,
+      polygons: polygons,
+    );
+  }
+
   factory MapConfig.fromToolInput(Map<String, dynamic> input) {
     final rawMarkers = input['markers'] as List? ?? [];
     final rawPolygons = input['polygons'] as List? ?? [];
@@ -184,9 +365,11 @@ class MapConfig {
           .toList(),
       polygons: rawPolygons
           .map((p) => MapPolygon.fromJson(p as Map<String, dynamic>))
+          .where((p) => p.points.length >= 3)
           .toList(),
       routes: rawRoutes
           .map((r) => MapRoute.fromJson(r as Map<String, dynamic>))
+          .where((r) => r.points.length >= 2)
           .toList(),
       circles: rawCircles
           .map((c) => MapCircle.fromJson(c as Map<String, dynamic>))

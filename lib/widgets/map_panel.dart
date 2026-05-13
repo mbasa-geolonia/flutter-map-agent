@@ -26,6 +26,7 @@ class MapPanel extends StatefulWidget {
 
 class _MapPanelState extends State<MapPanel> {
   final _mapController = MapController();
+  final LayerHitNotifier<MapPolygon> _polygonHitNotifier = ValueNotifier(null);
   MapConfig? _lastConfig;
   MapStyle _mapStyle = MapStyle.stdPc;
 
@@ -33,6 +34,23 @@ class _MapPanelState extends State<MapPanel> {
   void dispose() {
     _mapController.dispose();
     super.dispose();
+  }
+
+  void _showPolygonPopup(MapPolygon polygon) {
+    if (polygon.popupInfo == null) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(polygon.label ?? 'Area Info'),
+        content: SingleChildScrollView(child: Text(polygon.popupInfo!)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _animateTo(MapConfig config) {
@@ -169,6 +187,12 @@ class _MapPanelState extends State<MapPanel> {
               initialZoom: config.zoom,
               minZoom: 2,
               maxZoom: 19,
+              onTap: (tapPos, latLng) {
+                final hit = _polygonHitNotifier.value;
+                if (hit != null && hit.hitValues.isNotEmpty) {
+                  _showPolygonPopup(hit.hitValues.first);
+                }
+              },
             ),
             children: [
               TileLayer(
@@ -194,7 +218,9 @@ class _MapPanelState extends State<MapPanel> {
                 ),
               if (config.polygons.isNotEmpty)
                 PolygonLayer(
+                  hitNotifier: _polygonHitNotifier,
                   polygons: config.polygons
+                      .where((poly) => poly.points.length >= 3)
                       .map(
                         (poly) => Polygon(
                           points: poly.points.map((p) => p.latLng).toList(),
@@ -202,6 +228,7 @@ class _MapPanelState extends State<MapPanel> {
                           borderColor: Colors.black12,
                           borderStrokeWidth: 1.5,
                           label: poly.label,
+                          hitValue: poly,
                           labelStyle: const TextStyle(
                             color: Colors.black,
                             fontSize: 11.8,
@@ -236,6 +263,7 @@ class _MapPanelState extends State<MapPanel> {
               if (config.routes.isNotEmpty)
                 PolylineLayer(
                   polylines: config.routes
+                      .where((route) => route.points.length >= 2)
                       .map(
                         (route) => Polyline(
                           points: route.points.map((p) => p.latLng).toList(),
