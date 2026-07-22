@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolonia_design_tokens/geolonia_design_tokens.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
@@ -41,6 +42,9 @@ class _MapPanelState extends State<MapPanel> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(GeoloniaRadii.card),
+        ),
         title: Text(polygon.label ?? 'Area Info'),
         content: SingleChildScrollView(child: Text(polygon.popupInfo!)),
         actions: [
@@ -95,7 +99,9 @@ class _MapPanelState extends State<MapPanel> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
             color: theme.colorScheme.surface,
-            border: Border(bottom: BorderSide(color: theme.dividerColor)),
+            border: Border(
+              bottom: BorderSide(color: theme.colorScheme.outline),
+            ),
           ),
           child: Row(
             children: [
@@ -115,41 +121,35 @@ class _MapPanelState extends State<MapPanel> {
                 ),
               ),
               if (config.markers.isNotEmpty) ...[
-                Chip(
-                  label: Text(
-                    '${config.markers.length} marker'
-                    '${config.markers.length == 1 ? '' : 's'}',
-                  ),
-                  avatar: const Icon(Icons.place, size: 14),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                _StatBadge(
+                  icon: Icons.place,
+                  label:
+                      '${config.markers.length} marker'
+                      '${config.markers.length == 1 ? '' : 's'}',
+                  surface: GeoloniaColors.statusInfoSurface,
+                  text: GeoloniaColors.statusInfoText,
                 ),
                 const SizedBox(width: 6),
               ],
               if (config.routes.isNotEmpty) ...[
-                Chip(
-                  label: Text(
-                    '${config.routes.length} route'
-                    '${config.routes.length == 1 ? '' : 's'}',
-                  ),
-                  avatar: const Icon(Icons.route, size: 14),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                _StatBadge(
+                  icon: Icons.route,
+                  label:
+                      '${config.routes.length} route'
+                      '${config.routes.length == 1 ? '' : 's'}',
+                  surface: GeoloniaColors.statusSuccessSurface,
+                  text: GeoloniaColors.statusSuccessText,
                 ),
                 const SizedBox(width: 6),
               ],
               if (config.circles.isNotEmpty) ...[
-                Chip(
-                  label: Text(
-                    '${config.circles.length} circle'
-                    '${config.circles.length == 1 ? '' : 's'}',
-                  ),
-                  avatar: const Icon(Icons.circle_outlined, size: 14),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                _StatBadge(
+                  icon: Icons.circle_outlined,
+                  label:
+                      '${config.circles.length} circle'
+                      '${config.circles.length == 1 ? '' : 's'}',
+                  surface: GeoloniaColors.statusWarningSurface,
+                  text: GeoloniaColors.statusWarningText,
                 ),
                 const SizedBox(width: 6),
               ],
@@ -158,7 +158,7 @@ class _MapPanelState extends State<MapPanel> {
                 child: DropdownButton<MapStyle>(
                   value: _mapStyle,
                   isDense: true,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(GeoloniaRadii.control),
                   items: MapStyle.values
                       .map(
                         (s) => DropdownMenuItem(
@@ -340,6 +340,49 @@ class _MarkerWidget extends StatelessWidget {
         ),
         Icon(Icons.location_pin, color: color, size: 30),
       ],
+    );
+  }
+}
+
+class _StatBadge extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color surface;
+  final Color text;
+
+  const _StatBadge({
+    required this.icon,
+    required this.label,
+    required this.surface,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: GeoloniaSpacing.space2,
+        vertical: GeoloniaSpacing.space1,
+      ),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(GeoloniaRadii.tight),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: text),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: GeoloniaFontWeights.bold,
+              color: text,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

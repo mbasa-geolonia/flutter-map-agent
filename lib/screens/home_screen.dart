@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolonia_design_tokens/geolonia_design_tokens.dart';
 import 'package:provider/provider.dart';
 import '../config/app_config.dart';
 import '../models/message.dart';
@@ -49,9 +50,9 @@ class AppState extends ChangeNotifier {
   }
 
   AiService _buildService(AiProvider provider) => switch (provider) {
-        AiProvider.claude => ClaudeService(mcp: _mcp),
-        AiProvider.openAi => OpenAiService(mcp: _mcp),
-      };
+    AiProvider.claude => ClaudeService(mcp: _mcp),
+    AiProvider.openAi => OpenAiService(mcp: _mcp),
+  };
 
   AiProvider get aiProvider => _aiProvider;
 
@@ -76,13 +77,15 @@ class AppState extends ChangeNotifier {
     messages.add(userMsg);
 
     final assistantId = '${DateTime.now().millisecondsSinceEpoch}_assistant';
-    messages.add(ChatMessage(
-      id: assistantId,
-      role: MessageRole.assistant,
-      text: '',
-      timestamp: DateTime.now(),
-      isLoading: true,
-    ));
+    messages.add(
+      ChatMessage(
+        id: assistantId,
+        role: MessageRole.assistant,
+        text: '',
+        timestamp: DateTime.now(),
+        isLoading: true,
+      ),
+    );
 
     isLoading = true;
     notifyListeners();
@@ -165,13 +168,15 @@ class _HomeBodyState extends State<_HomeBody> {
           preferredSize: const Size.fromHeight(40),
           child: Container(
             height: 40,
-            color: theme.colorScheme.surfaceContainerLow,
+            color: theme.colorScheme.surfaceContainerHighest,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
                 Text(
                   'AI Provider:',
-                  style: theme.textTheme.labelMedium,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(width: 8),
                 SegmentedButton<AiProvider>(
@@ -188,8 +193,7 @@ class _HomeBodyState extends State<_HomeBody> {
                     ),
                   ],
                   selected: {state.aiProvider},
-                  onSelectionChanged: (set) =>
-                      state.switchProvider(set.first),
+                  onSelectionChanged: (set) => state.switchProvider(set.first),
                   style: ButtonStyle(
                     visualDensity: VisualDensity.compact,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -203,13 +207,17 @@ class _HomeBodyState extends State<_HomeBody> {
                     Icon(
                       Icons.circle,
                       size: 8,
-                      color: state.mcpReady ? Colors.green : Colors.grey,
+                      color: state.mcpReady
+                          ? GeoloniaColors.statusSuccess
+                          : theme.colorScheme.onSurfaceVariant,
                     ),
                     const SizedBox(width: 4),
                     Text(
                       state.mcpReady ? 'MCP connected' : 'MCP offline',
                       style: theme.textTheme.labelSmall?.copyWith(
-                        color: state.mcpReady ? Colors.green : Colors.grey,
+                        color: state.mcpReady
+                            ? GeoloniaColors.statusSuccess
+                            : theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -221,10 +229,7 @@ class _HomeBodyState extends State<_HomeBody> {
       ),
       body: Row(
         children: [
-          SizedBox(
-            width: _chatWidth,
-            child: const ChatPanel(),
-          ),
+          SizedBox(width: _chatWidth, child: const ChatPanel()),
           // Draggable divider
           GestureDetector(
             behavior: HitTestBehavior.translucent,
@@ -242,10 +247,7 @@ class _HomeBodyState extends State<_HomeBody> {
                 width: 6,
                 color: Colors.transparent,
                 child: Center(
-                  child: Container(
-                    width: 1,
-                    color: theme.dividerColor,
-                  ),
+                  child: Container(width: 1, color: theme.colorScheme.outline),
                 ),
               ),
             ),

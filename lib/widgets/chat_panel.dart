@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolonia_design_tokens/geolonia_design_tokens.dart';
 import 'package:provider/provider.dart';
 
 import '../screens/home_screen.dart';
@@ -58,7 +59,9 @@ class _ChatPanelState extends State<ChatPanel> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
             color: theme.colorScheme.surface,
-            border: Border(bottom: BorderSide(color: theme.dividerColor)),
+            border: Border(
+              bottom: BorderSide(color: theme.colorScheme.outline),
+            ),
           ),
           child: Row(
             children: [
@@ -103,7 +106,7 @@ class _ChatPanelState extends State<ChatPanel> {
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
           decoration: BoxDecoration(
             color: theme.colorScheme.surface,
-            border: Border(top: BorderSide(color: theme.dividerColor)),
+            border: Border(top: BorderSide(color: theme.colorScheme.outline)),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -118,15 +121,28 @@ class _ChatPanelState extends State<ChatPanel> {
                   decoration: InputDecoration(
                     hintText: 'Ask about any location…',
                     hintStyle: TextStyle(
-                      color: theme.colorScheme.onSurface.withAlpha(102),
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      borderSide: BorderSide(color: theme.dividerColor),
+                      borderRadius: BorderRadius.circular(
+                        GeoloniaRadii.control,
+                      ),
+                      borderSide: BorderSide(color: theme.colorScheme.outline),
                     ),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      borderSide: BorderSide(color: theme.dividerColor),
+                      borderRadius: BorderRadius.circular(
+                        GeoloniaRadii.control,
+                      ),
+                      borderSide: BorderSide(color: theme.colorScheme.outline),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(
+                        GeoloniaRadii.control,
+                      ),
+                      borderSide: BorderSide(
+                        color: theme.colorScheme.primary,
+                        width: 1.5,
+                      ),
                     ),
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 16,

@@ -91,6 +91,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  geolonia_design_tokens:
+    dependency: "direct main"
+    description:
+      name: geolonia_design_tokens
+      sha256: ea8741b6248844d42496e0774af3331690765f14c964507c3cff849406237c7d
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.11"
   http:
     dependency: "direct main"
     description:
@@ -346,4 +354,4 @@ packages:
     version: "2.0.0"
 sdks:
   dart: ">=3.11.4 <4.0.0"
-  flutter: ">=3.18.0-18.0.pre.54"
+  flutter: ">=3.22.0"
