@@ -24,11 +24,11 @@ class OpenAiService implements AiService {
       'the map, provide a helpful and concise explanation. '
       'For cities, use zoom 10-12. For streets/buildings, use zoom 15-18. '
       'For countries/continents, use zoom 4-7. Always show the map first. '
-      'When a tool result says "GeoJSON result rendered on map", the geometry '
-      'is already displayed with default colors. You may call show_map once '
-      'to add markers or set polygon_fill_color — do NOT include a polygons '
-      'or routes array, as the coordinates are already rendered and will be '
-      'preserved automatically.';
+      'When a tool result says "GeoJSON rendered" or "CSV/WKT rendered", the '
+      'geometry is already displayed with default colors. You may call '
+      'show_map once to add markers or set polygon_fill_color — do NOT '
+      'include a polygons or routes array, as the coordinates are already '
+      'rendered and will be preserved automatically.';
 
   // OpenAI tool definition: uses "function" wrapper and "parameters" (not "input_schema")
   static const _showMapTool = {
@@ -223,6 +223,30 @@ class OpenAiService implements AiService {
       int lastGeoJsonPolygonCount = 0;
       int lastGeoJsonRouteCount = 0;
 
+      // Merges an auto-rendered config (from GeoJSON or CSV+WKT) into the
+      // accumulated map state, updates the fill-color-override bookkeeping,
+      // and pushes the result to the UI.
+      MapConfig mergeAutoRendered(MapConfig autoConfig) {
+        final current = accumulatedMapConfig;
+        final merged = current == null
+            ? autoConfig
+            : MapConfig(
+                centerLat: autoConfig.centerLat,
+                centerLng: autoConfig.centerLng,
+                zoom: autoConfig.zoom,
+                title: autoConfig.title ?? current.title,
+                markers: [...current.markers, ...autoConfig.markers],
+                routes: [...current.routes, ...autoConfig.routes],
+                polygons: [...current.polygons, ...autoConfig.polygons],
+                circles: [...current.circles, ...autoConfig.circles],
+              );
+        lastGeoJsonPolygonCount = autoConfig.polygons.length;
+        lastGeoJsonRouteCount = autoConfig.routes.length;
+        accumulatedMapConfig = merged;
+        onMap(merged);
+        return merged;
+      }
+
       // Loop until GPT stops requesting tool calls.
       // This supports multi-step flows such as:
       //   1. GPT calls geocode (MCP) → gets coordinates
@@ -268,13 +292,16 @@ class OpenAiService implements AiService {
             if (accumulatedMapConfig == null) {
               mapConfig = fromTool;
             } else {
+              // Closures over `accumulatedMapConfig` elsewhere in this scope
+              // disable null-promotion, so bind a definitely-non-null local.
+              final current = accumulatedMapConfig!;
               List<MapPolygon> mergedPolygons;
               if (polygonFillOverride != null && lastGeoJsonPolygonCount > 0) {
-                final total = accumulatedMapConfig.polygons.length;
+                final total = current.polygons.length;
                 final splitAt = (total - lastGeoJsonPolygonCount).clamp(0, total);
                 mergedPolygons = [
-                  ...accumulatedMapConfig.polygons.sublist(0, splitAt),
-                  ...accumulatedMapConfig.polygons.sublist(splitAt).map((p) =>
+                  ...current.polygons.sublist(0, splitAt),
+                  ...current.polygons.sublist(splitAt).map((p) =>
                       MapPolygon(
                         points: p.points,
                         label: p.label,
@@ -285,7 +312,7 @@ class OpenAiService implements AiService {
                 ];
               } else {
                 mergedPolygons = [
-                  ...accumulatedMapConfig.polygons,
+                  ...current.polygons,
                   ...fromTool.polygons,
                 ];
               }
@@ -293,18 +320,18 @@ class OpenAiService implements AiService {
                 centerLat: fromTool.centerLat,
                 centerLng: fromTool.centerLng,
                 zoom: fromTool.zoom,
-                title: fromTool.title ?? accumulatedMapConfig.title,
+                title: fromTool.title ?? current.title,
                 markers: [
-                  ...accumulatedMapConfig.markers,
+                  ...current.markers,
                   ...fromTool.markers,
                 ],
                 routes: [
-                  ...accumulatedMapConfig.routes,
+                  ...current.routes,
                   ...fromTool.routes,
                 ],
                 polygons: mergedPolygons,
                 circles: [
-                  ...accumulatedMapConfig.circles,
+                  ...current.circles,
                   ...fromTool.circles,
                 ],
               );
@@ -319,66 +346,52 @@ class OpenAiService implements AiService {
             // MCP tool — forward to the MCP server
             final rawResult = await _mcp.callTool(name, toolInput);
 
-            // If the MCP result is GeoJSON, render it directly rather than
-            // asking the model to re-emit thousands of coordinates.
+            // If the MCP result is GeoJSON or CSV+WKT, render it directly
+            // rather than asking the model to re-emit thousands of coordinates.
             String mcpResult = rawResult;
+            MapConfig? autoConfig;
+            String sourceLabel = 'GeoJSON';
             try {
               final decoded = jsonDecode(rawResult);
               if (decoded is Map<String, dynamic> &&
                   MapConfig.isGeoJson(decoded)) {
-                final mapConfig = MapConfig.fromGeoJson(
+                autoConfig = MapConfig.fromGeoJson(
                   decoded,
                   title: name.replaceAll('_', ' '),
                   paletteOffset: (accumulatedMapConfig?.routes.length ?? 0) +
                       (accumulatedMapConfig?.polygons.length ?? 0),
                 );
-                final hasData = mapConfig.markers.isNotEmpty ||
-                    mapConfig.routes.isNotEmpty ||
-                    mapConfig.polygons.isNotEmpty;
-                if (hasData) {
-                  final merged = accumulatedMapConfig == null
-                      ? mapConfig
-                      : MapConfig(
-                          centerLat: mapConfig.centerLat,
-                          centerLng: mapConfig.centerLng,
-                          zoom: mapConfig.zoom,
-                          title: mapConfig.title ?? accumulatedMapConfig.title,
-                          markers: [
-                            ...accumulatedMapConfig.markers,
-                            ...mapConfig.markers,
-                          ],
-                          routes: [
-                            ...accumulatedMapConfig.routes,
-                            ...mapConfig.routes,
-                          ],
-                          polygons: [
-                            ...accumulatedMapConfig.polygons,
-                            ...mapConfig.polygons,
-                          ],
-                          circles: [
-                            ...accumulatedMapConfig.circles,
-                            ...mapConfig.circles,
-                          ],
-                        );
-                  lastGeoJsonPolygonCount = mapConfig.polygons.length;
-                  lastGeoJsonRouteCount = mapConfig.routes.length;
-                  accumulatedMapConfig = merged;
-                  onMap(merged);
-                  final newColors = mapConfig.polygons
-                      .map((p) => p.fillColor ?? 'default')
-                      .join(', ');
-                  mcpResult =
-                      'GeoJSON rendered: ${mapConfig.polygons.length} new '
-                      'polygon(s) with auto-assigned color(s): [$newColors]. '
-                      'Total on map: ${merged.polygons.length} polygon(s), '
-                      '${merged.routes.length} route(s). '
-                      'To change the color of these new polygon(s), call '
-                      'show_map with polygon_fill_color. To add markers, '
-                      'include them in show_map. '
-                      'Do NOT include polygon or route coordinates.';
-                }
               }
             } catch (_) {}
+            if (autoConfig == null && MapConfig.looksLikeCsvWkt(rawResult)) {
+              sourceLabel = 'CSV/WKT';
+              autoConfig = MapConfig.fromCsvWkt(
+                rawResult,
+                title: name.replaceAll('_', ' '),
+                paletteOffset: (accumulatedMapConfig?.routes.length ?? 0) +
+                    (accumulatedMapConfig?.polygons.length ?? 0),
+              );
+            }
+            if (autoConfig != null) {
+              final hasData = autoConfig.markers.isNotEmpty ||
+                  autoConfig.routes.isNotEmpty ||
+                  autoConfig.polygons.isNotEmpty;
+              if (hasData) {
+                final newColors = autoConfig.polygons
+                    .map((p) => p.fillColor ?? 'default')
+                    .join(', ');
+                final merged = mergeAutoRendered(autoConfig);
+                mcpResult =
+                    '$sourceLabel rendered: ${autoConfig.polygons.length} new '
+                    'polygon(s) with auto-assigned color(s): [$newColors]. '
+                    'Total on map: ${merged.polygons.length} polygon(s), '
+                    '${merged.routes.length} route(s). '
+                    'To change the color of these new polygon(s), call '
+                    'show_map with polygon_fill_color. To add markers, '
+                    'include them in show_map. '
+                    'Do NOT include polygon or route coordinates.';
+              }
+            }
             result = mcpResult;
           } else {
             result = 'Tool "$name" is not available.';

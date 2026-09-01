@@ -2,6 +2,13 @@ import 'dart:ui';
 
 import 'package:latlong2/latlong.dart';
 
+/// Distinct colours for up to 8 separate features/paths, shared by the
+/// GeoJSON and CSV+WKT auto-render paths.
+const _palette = [
+  '#E53935', '#1E88E5', '#43A047', '#FB8C00',
+  '#8E24AA', '#00ACC1', '#F4511E', '#6D4C41',
+];
+
 /// Parse a `#RRGGBB` or `#AARRGGBB` hex string into a [Color].
 /// Returns [fallback] when [hex] is null, empty, or malformed.
 Color hexToColor(String? hex, Color fallback) {
@@ -196,11 +203,6 @@ class MapConfig {
     final routes = <MapRoute>[];
     final polygons = <MapPolygon>[];
 
-    // Distinct colours for up to 8 separate features/paths.
-    const palette = [
-      '#E53935', '#1E88E5', '#43A047', '#FB8C00',
-      '#8E24AA', '#00ACC1', '#F4511E', '#6D4C41',
-    ];
     int paletteIdx = paletteOffset;
 
     List<Map<String, dynamic>> features = [];
@@ -238,7 +240,7 @@ class MapConfig {
           color: propColor,
         ));
       } else if (geomType == 'LineString') {
-        final color = propColor ?? palette[paletteIdx++ % palette.length];
+        final color = propColor ?? _palette[paletteIdx++ % _palette.length];
         final coords = (geometry['coordinates'] as List).cast<List>();
         if (coords.length >= 2) {
           routes.add(MapRoute(
@@ -254,7 +256,7 @@ class MapConfig {
         }
       } else if (geomType == 'MultiLineString') {
         // Each Feature gets one colour; its segments share that colour.
-        final color = propColor ?? palette[paletteIdx++ % palette.length];
+        final color = propColor ?? _palette[paletteIdx++ % _palette.length];
         final lines = (geometry['coordinates'] as List).cast<List>();
         for (final line in lines) {
           final coords = line.cast<List>();
@@ -273,7 +275,7 @@ class MapConfig {
         }
       } else if (geomType == 'Polygon') {
         final fillColor = props['fill'] as String? ??
-            palette[paletteIdx++ % palette.length];
+            _palette[paletteIdx++ % _palette.length];
         final rings = (geometry['coordinates'] as List).cast<List>();
         if (rings.isNotEmpty) {
           final exterior = rings[0].cast<List>();
@@ -293,7 +295,7 @@ class MapConfig {
         }
       } else if (geomType == 'MultiPolygon') {
         final fillColor = props['fill'] as String? ??
-            palette[paletteIdx++ % palette.length];
+            _palette[paletteIdx++ % _palette.length];
         for (final poly in (geometry['coordinates'] as List).cast<List>()) {
           if (poly.isNotEmpty) {
             final exterior = (poly[0] as List).cast<List>();
@@ -316,6 +318,149 @@ class MapConfig {
     }
 
     // Derive map center from bounding box of all collected points.
+    final allLats = [
+      ...markers.map((m) => m.lat),
+      ...routes.expand((r) => r.points).map((p) => p.lat),
+      ...polygons.expand((p) => p.points).map((p) => p.lat),
+    ];
+    final allLngs = [
+      ...markers.map((m) => m.lng),
+      ...routes.expand((r) => r.points).map((p) => p.lng),
+      ...polygons.expand((p) => p.points).map((p) => p.lng),
+    ];
+
+    final centerLat = allLats.isNotEmpty
+        ? (allLats.reduce((a, b) => a < b ? a : b) +
+               allLats.reduce((a, b) => a > b ? a : b)) /
+              2
+        : 35.6762;
+    final centerLng = allLngs.isNotEmpty
+        ? (allLngs.reduce((a, b) => a < b ? a : b) +
+               allLngs.reduce((a, b) => a > b ? a : b)) /
+              2
+        : 139.6503;
+
+    return MapConfig(
+      centerLat: centerLat,
+      centerLng: centerLng,
+      zoom: zoom,
+      title: title,
+      markers: markers,
+      routes: routes,
+      polygons: polygons,
+    );
+  }
+
+  /// Returns true when [text] looks like a CSV table with a WKT geometry
+  /// column, e.g. `id,name,geom\n1,Tokyo,"POLYGON((139.1 35.1, ...))"`.
+  static bool looksLikeCsvWkt(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      return false;
+    }
+    final firstLineEnd = trimmed.indexOf('\n');
+    final header =
+        (firstLineEnd == -1 ? trimmed : trimmed.substring(0, firstLineEnd))
+            .toLowerCase();
+    if (!header.contains(',')) return false;
+    final headerCols = header.split(',').map((h) => h.trim());
+    if (_wktColumnNames.any(headerCols.contains)) return true;
+    // Fallback: header didn't literally match, but the body clearly
+    // contains WKT geometry tokens.
+    return RegExp(
+      r'\b(POLYGON|MULTIPOLYGON|LINESTRING|MULTILINESTRING|POINT)\s*[Z]?\s*\(',
+      caseSensitive: false,
+    ).hasMatch(trimmed);
+  }
+
+  static const _wktColumnNames = ['geom', 'geometry', 'wkt', 'the_geom', 'shape'];
+  static const _labelColumnNames = ['name', 'label', 'title', 'id'];
+  static const _colorColumnNames = ['color', 'fill', 'fill_color'];
+  static const _popupColumnNames = ['popup_info', 'description', 'info'];
+
+  /// Parse a CSV table (header row + data rows) whose geometry column holds
+  /// WKT strings (POINT/LINESTRING/MULTILINESTRING/POLYGON/MULTIPOLYGON)
+  /// into a [MapConfig]. Mirrors [fromGeoJson]: coordinates are consumed
+  /// entirely client-side so the LLM never has to re-emit them.
+  factory MapConfig.fromCsvWkt(
+    String csv, {
+    String? title,
+    double zoom = 13.0,
+    int paletteOffset = 0,
+  }) {
+    final rows = _parseCsvRows(csv.trim());
+    if (rows.isEmpty) {
+      return MapConfig(centerLat: 35.6762, centerLng: 139.6503, zoom: zoom, title: title);
+    }
+
+    final header = rows.first.map((h) => h.trim().toLowerCase()).toList();
+    int findColumn(List<String> names) {
+      for (final name in names) {
+        final idx = header.indexOf(name);
+        if (idx != -1) return idx;
+      }
+      return -1;
+    }
+
+    final geomIdx = findColumn(_wktColumnNames);
+    if (geomIdx == -1) {
+      return MapConfig(centerLat: 35.6762, centerLng: 139.6503, zoom: zoom, title: title);
+    }
+    final labelIdx = findColumn(_labelColumnNames);
+    final colorIdx = findColumn(_colorColumnNames);
+    final popupIdx = findColumn(_popupColumnNames);
+
+    final markers = <MapMarker>[];
+    final routes = <MapRoute>[];
+    final polygons = <MapPolygon>[];
+    int paletteIdx = paletteOffset;
+
+    String? cell(List<String> row, int idx) {
+      if (idx == -1 || idx >= row.length) return null;
+      final v = row[idx].trim();
+      return v.isEmpty ? null : v;
+    }
+
+    for (final row in rows.skip(1)) {
+      final wkt = cell(row, geomIdx);
+      if (wkt == null) continue;
+
+      final label = cell(row, labelIdx) ?? '';
+      final color = cell(row, colorIdx);
+      final popup = cell(row, popupIdx);
+
+      for (final geom in _parseWkt(wkt)) {
+        switch (geom.kind) {
+          case _WktKind.point:
+            markers.add(MapMarker(
+              lat: geom.points.first.lat,
+              lng: geom.points.first.lng,
+              label: label,
+              color: color,
+            ));
+            break;
+          case _WktKind.line:
+            if (geom.points.length >= 2) {
+              routes.add(MapRoute(
+                points: geom.points,
+                color: color ?? _palette[paletteIdx++ % _palette.length],
+              ));
+            }
+            break;
+          case _WktKind.polygon:
+            if (geom.points.length >= 3) {
+              polygons.add(MapPolygon(
+                points: geom.points,
+                label: label.isNotEmpty ? label : null,
+                fillColor: color ?? _palette[paletteIdx++ % _palette.length],
+                popupInfo: popup,
+              ));
+            }
+            break;
+        }
+      }
+    }
+
     final allLats = [
       ...markers.map((m) => m.lat),
       ...routes.expand((r) => r.points).map((p) => p.lat),
@@ -375,5 +520,165 @@ class MapConfig {
           .map((c) => MapCircle.fromJson(c as Map<String, dynamic>))
           .toList(),
     );
+  }
+}
+
+/// Parse RFC4180-ish CSV text into rows of string cells, honoring quoted
+/// fields (so a WKT geometry cell containing commas, e.g.
+/// `"POLYGON((1 2, 3 4))"`, stays a single field).
+List<List<String>> _parseCsvRows(String text) {
+  final rows = <List<String>>[];
+  var row = <String>[];
+  var field = StringBuffer();
+  var inQuotes = false;
+  var i = 0;
+  final len = text.length;
+
+  while (i < len) {
+    final ch = text[i];
+    if (inQuotes) {
+      if (ch == '"') {
+        if (i + 1 < len && text[i + 1] == '"') {
+          field.write('"');
+          i += 2;
+        } else {
+          inQuotes = false;
+          i++;
+        }
+      } else {
+        field.write(ch);
+        i++;
+      }
+      continue;
+    }
+    switch (ch) {
+      case '"':
+        inQuotes = true;
+        i++;
+        break;
+      case ',':
+        row.add(field.toString());
+        field = StringBuffer();
+        i++;
+        break;
+      case '\r':
+        i++;
+        break;
+      case '\n':
+        row.add(field.toString());
+        field = StringBuffer();
+        rows.add(row);
+        row = [];
+        i++;
+        break;
+      default:
+        field.write(ch);
+        i++;
+    }
+  }
+  if (field.isNotEmpty || row.isNotEmpty) {
+    row.add(field.toString());
+    rows.add(row);
+  }
+  return rows;
+}
+
+/// Splits a WKT coordinate expression into its parenthesised top-level
+/// groups, e.g. `(a),(b)` -> `['a', 'b']`. Used to peel one nesting level
+/// at a time off POLYGON/MULTIPOLYGON/MULTILINESTRING bodies.
+List<String> _splitTopLevelGroups(String s) {
+  final groups = <String>[];
+  var depth = 0;
+  var start = -1;
+  for (var i = 0; i < s.length; i++) {
+    final c = s[i];
+    if (c == '(') {
+      if (depth == 0) start = i + 1;
+      depth++;
+    } else if (c == ')') {
+      depth--;
+      if (depth == 0 && start != -1) {
+        groups.add(s.substring(start, i));
+        start = -1;
+      }
+    }
+  }
+  return groups;
+}
+
+/// Parses a flat `"lng lat, lng lat, ..."` coordinate list (optionally with
+/// a trailing Z/M ordinate, which is ignored) into [MapMarker] points.
+List<MapMarker> _parseWktCoordList(String s) {
+  final points = <MapMarker>[];
+  for (final pair in s.split(',')) {
+    final parts = pair.trim().split(RegExp(r'\s+'));
+    if (parts.length < 2) continue;
+    final lng = double.tryParse(parts[0]);
+    final lat = double.tryParse(parts[1]);
+    if (lng == null || lat == null) continue;
+    points.add(MapMarker(lat: lat, lng: lng, label: ''));
+  }
+  return points;
+}
+
+enum _WktKind { point, line, polygon }
+
+class _WktGeom {
+  final _WktKind kind;
+  final List<MapMarker> points;
+  const _WktGeom(this.kind, this.points);
+}
+
+/// Parses a WKT geometry string into zero or more [_WktGeom]s. Only the
+/// exterior ring of each polygon is kept (holes are ignored, matching
+/// [MapConfig.fromGeoJson]'s behavior).
+List<_WktGeom> _parseWkt(String wkt) {
+  final trimmed = wkt.trim();
+  final typeMatch = RegExp(r'^([A-Za-z]+)').firstMatch(trimmed);
+  if (typeMatch == null) return const [];
+  final type = typeMatch.group(1)!.toUpperCase();
+  final openIdx = trimmed.indexOf('(');
+  final closeIdx = trimmed.lastIndexOf(')');
+  if (openIdx == -1 || closeIdx == -1 || closeIdx <= openIdx) return const [];
+  final body = trimmed.substring(openIdx + 1, closeIdx);
+
+  switch (type) {
+    case 'POINT':
+      final pts = _parseWktCoordList(body);
+      return pts.isNotEmpty ? [_WktGeom(_WktKind.point, [pts.first])] : const [];
+
+    case 'LINESTRING':
+      final pts = _parseWktCoordList(body);
+      return pts.length >= 2 ? [_WktGeom(_WktKind.line, pts)] : const [];
+
+    case 'MULTILINESTRING':
+      return _splitTopLevelGroups(body)
+          .map(_parseWktCoordList)
+          .where((pts) => pts.length >= 2)
+          .map((pts) => _WktGeom(_WktKind.line, pts))
+          .toList();
+
+    case 'POLYGON':
+      final rings = _splitTopLevelGroups(body);
+      if (rings.isEmpty) return const [];
+      final exterior = _parseWktCoordList(rings.first);
+      return exterior.length >= 3
+          ? [_WktGeom(_WktKind.polygon, exterior)]
+          : const [];
+
+    case 'MULTIPOLYGON':
+      final result = <_WktGeom>[];
+      for (final poly in _splitTopLevelGroups(body)) {
+        final rings = _splitTopLevelGroups(poly);
+        if (rings.isEmpty) continue;
+        final exterior = _parseWktCoordList(rings.first);
+        if (exterior.length >= 3) {
+          result.add(_WktGeom(_WktKind.polygon, exterior));
+        }
+      }
+      return result;
+
+    default:
+      return const [];
   }
 }
