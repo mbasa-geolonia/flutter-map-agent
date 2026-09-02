@@ -86,6 +86,13 @@ class MapPolygon {
   /// Fill with 47% opacity (alpha 120/255).
   Color get resolvedFillColor =>
       hexToColor(fillColor, const Color(0xFFFF9800)).withAlpha(120);
+
+  /// The simple average of [points] — used to place the polygon's label.
+  LatLng get centroid {
+    final sumLat = points.fold<double>(0, (s, p) => s + p.lat);
+    final sumLng = points.fold<double>(0, (s, p) => s + p.lng);
+    return LatLng(sumLat / points.length, sumLng / points.length);
+  }
 }
 
 class MapCircle {
@@ -228,6 +235,12 @@ class MapConfig {
           .whereType<Object>()
           .map((e) => e.toString())
           .firstWhere((_) => true, orElse: () => '');
+      // Fallback popup body so tapping a polygon shows its real attributes
+      // even when the source has no dedicated description/info property.
+      final popupInfo = props.entries
+          .where((e) => e.value != null && e.value.toString().trim().isNotEmpty)
+          .map((e) => '${e.key}: ${e.value}')
+          .join('\n');
 
       final geomType = geometry['type'] as String?;
 
@@ -290,6 +303,7 @@ class MapConfig {
                   .toList(),
               label: label.isNotEmpty ? label : null,
               fillColor: fillColor,
+              popupInfo: popupInfo.isNotEmpty ? popupInfo : null,
             ));
           }
         }
@@ -310,6 +324,7 @@ class MapConfig {
                     .toList(),
                 label: label.isNotEmpty ? label : null,
                 fillColor: fillColor,
+                popupInfo: popupInfo.isNotEmpty ? popupInfo : null,
               ));
             }
           }
@@ -374,7 +389,9 @@ class MapConfig {
   }
 
   static const _wktColumnNames = ['geom', 'geometry', 'wkt', 'the_geom', 'shape'];
-  static const _labelColumnNames = ['name', 'label', 'title', 'id'];
+  static const _labelColumnNames = [
+    'name', 'label', 'title', 'id', 'mesh_code', 'meshcode', 'mesh_id',
+  ];
   static const _colorColumnNames = ['color', 'fill', 'fill_color'];
   static const _popupColumnNames = ['popup_info', 'description', 'info'];
 
@@ -394,21 +411,14 @@ class MapConfig {
     }
 
     final header = rows.first.map((h) => h.trim().toLowerCase()).toList();
-    int findColumn(List<String> names) {
-      for (final name in names) {
-        final idx = header.indexOf(name);
-        if (idx != -1) return idx;
-      }
-      return -1;
-    }
 
-    final geomIdx = findColumn(_wktColumnNames);
+    final geomIdx = _findCsvColumn(header, _wktColumnNames);
     if (geomIdx == -1) {
       return MapConfig(centerLat: 35.6762, centerLng: 139.6503, zoom: zoom, title: title);
     }
-    final labelIdx = findColumn(_labelColumnNames);
-    final colorIdx = findColumn(_colorColumnNames);
-    final popupIdx = findColumn(_popupColumnNames);
+    final labelIdx = _findCsvColumn(header, _labelColumnNames);
+    final colorIdx = _findCsvColumn(header, _colorColumnNames);
+    final popupIdx = _findCsvColumn(header, _popupColumnNames);
 
     final markers = <MapMarker>[];
     final routes = <MapRoute>[];
@@ -421,13 +431,22 @@ class MapConfig {
       return v.isEmpty ? null : v;
     }
 
-    for (final row in rows.skip(1)) {
+    final dataRows = rows.skip(1).toList();
+    for (var i = 0; i < dataRows.length; i++) {
+      final row = dataRows[i];
       final wkt = cell(row, geomIdx);
       if (wkt == null) continue;
 
-      final label = cell(row, labelIdx) ?? '';
+      // Always non-empty: falls back to a synthetic, stable identifier
+      // (e.g. datasets like census mesh grids have no name/id column at
+      // all) so every feature stays addressable via polygon_colors.
+      final label = _resolveRowLabel(row, labelIdx, i + 1);
       final color = cell(row, colorIdx);
-      final popup = cell(row, popupIdx);
+      // Most CSV+WKT datasets (census, population, etc.) have no dedicated
+      // popup/description column — fall back to listing every attribute
+      // column so tapping a polygon still shows its real data.
+      final popup = cell(row, popupIdx) ??
+          _buildAutoPopupInfo(rows.first, row, geomIdx: geomIdx);
 
       for (final geom in _parseWkt(wkt)) {
         switch (geom.kind) {
@@ -451,7 +470,7 @@ class MapConfig {
             if (geom.points.length >= 3) {
               polygons.add(MapPolygon(
                 points: geom.points,
-                label: label.isNotEmpty ? label : null,
+                label: label,
                 fillColor: color ?? _palette[paletteIdx++ % _palette.length],
                 popupInfo: popup,
               ));
@@ -494,6 +513,38 @@ class MapConfig {
     );
   }
 
+  /// Returns [csv] with its geometry column values replaced by a short
+  /// placeholder, keeping every other column (labels, statistics, etc.)
+  /// intact. This lets the LLM see the attribute data it needs to build a
+  /// genuine thematic/choropleth map (via `polygon_colors`) without ever
+  /// having the expensive coordinate payload sent back to it.
+  static String stripCsvWktGeometry(
+    String csv, {
+    String placeholder = '[geometry omitted — already rendered]',
+  }) {
+    final rows = _parseCsvRows(csv.trim());
+    if (rows.isEmpty) return csv;
+    final header = rows.first.map((h) => h.trim().toLowerCase()).toList();
+    final geomIdx = _findCsvColumn(header, _wktColumnNames);
+    if (geomIdx == -1) return csv;
+    final labelIdx = _findCsvColumn(header, _labelColumnNames);
+
+    final out = StringBuffer()
+      ..writeln(['map_label', ...rows.first].map(_csvEscape).join(','));
+
+    final dataRows = rows.skip(1).toList();
+    for (var i = 0; i < dataRows.length; i++) {
+      final row = dataRows[i];
+      final cells = [
+        _resolveRowLabel(row, labelIdx, i + 1),
+        for (var c = 0; c < row.length; c++)
+          c == geomIdx ? placeholder : row[c],
+      ];
+      out.writeln(cells.map(_csvEscape).join(','));
+    }
+    return out.toString().trimRight();
+  }
+
   factory MapConfig.fromToolInput(Map<String, dynamic> input) {
     final rawMarkers = input['markers'] as List? ?? [];
     final rawPolygons = input['polygons'] as List? ?? [];
@@ -521,6 +572,227 @@ class MapConfig {
           .toList(),
     );
   }
+}
+
+String _roundCoord(double v) => v.toStringAsFixed(5);
+
+/// Removes duplicate markers (same rounded lat/lng, ~1m precision), keeping
+/// the LAST occurrence. The LLM tends to repeat "the same" marker (e.g. a
+/// search-center pin) across multiple show_map calls within one turn,
+/// instead of relying on it having already been added.
+List<MapMarker> dedupeMarkers(List<MapMarker> markers) {
+  final byKey = <String, MapMarker>{};
+  for (final m in markers) {
+    byKey['${_roundCoord(m.lat)},${_roundCoord(m.lng)}'] = m;
+  }
+  return byKey.values.toList();
+}
+
+/// Removes duplicate circles (same rounded lat/lng and radius), keeping the
+/// LAST occurrence — same rationale as [dedupeMarkers], for e.g. a repeated
+/// search-radius circle.
+List<MapCircle> dedupeCircles(List<MapCircle> circles) {
+  final byKey = <String, MapCircle>{};
+  for (final c in circles) {
+    final key =
+        '${_roundCoord(c.lat)},${_roundCoord(c.lng)},${c.radiusMeters.round()}';
+    byKey[key] = c;
+  }
+  return byKey.values.toList();
+}
+
+/// Removes duplicate polygons (same label AND same first point, ~1m
+/// precision), keeping the LAST occurrence. Keyed on label *and* location
+/// (not label alone) so two different datasets that happen to share a
+/// region name aren't incorrectly merged into one.
+List<MapPolygon> dedupePolygons(List<MapPolygon> polygons) {
+  final byKey = <String, MapPolygon>{};
+  final unlabeled = <MapPolygon>[];
+  for (final p in polygons) {
+    if (p.label == null || p.label!.isEmpty) {
+      unlabeled.add(p);
+      continue;
+    }
+    final first = p.points.isNotEmpty ? p.points.first : null;
+    final coord = first == null
+        ? ''
+        : '${_roundCoord(first.lat)},${_roundCoord(first.lng)}';
+    byKey['${p.label}|$coord'] = p;
+  }
+  return [...byKey.values, ...unlabeled];
+}
+
+/// Result of [applyPolygonColorOverrides]: the updated config plus which
+/// requested labels matched an existing polygon and which didn't — so the
+/// caller can report back to the LLM instead of silently no-oping on a
+/// label mismatch (which would otherwise let the model claim success when
+/// nothing actually changed on the map).
+class PolygonColorOverrideResult {
+  final MapConfig config;
+  final List<String> matchedLabels;
+  final List<String> unmatchedLabels;
+  const PolygonColorOverrideResult(
+      this.config, this.matchedLabels, this.unmatchedLabels);
+}
+
+String _normalizeLabel(String s) =>
+    s.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
+
+/// Applies `polygon_colors` (a list of `{label, fill_color}` maps) to
+/// [config]'s polygons. Used for thematic/choropleth maps where each region
+/// needs a different color without redrawing it.
+///
+/// Matching is intentionally lenient, since the LLM is reproducing label
+/// text rather than passing back an opaque id: tries an exact match first,
+/// then a whitespace/case-normalized match, then falls back to a unique
+/// substring match (only applied when exactly one polygon qualifies, to
+/// avoid mis-coloring an unrelated region).
+PolygonColorOverrideResult applyPolygonColorOverrides(
+  MapConfig config,
+  List<dynamic>? rawColors,
+) {
+  if (rawColors == null || rawColors.isEmpty) {
+    return PolygonColorOverrideResult(config, const [], const []);
+  }
+
+  final requested = <String, String>{};
+  for (final entry in rawColors) {
+    final m = entry as Map<String, dynamic>;
+    final label = m['label'] as String?;
+    final color = m['fill_color'] as String?;
+    if (label != null && color != null) requested[label] = color;
+  }
+  if (requested.isEmpty) {
+    return PolygonColorOverrideResult(config, const [], const []);
+  }
+
+  // label -> polygon index, plus a normalized lookup for fuzzy matching.
+  final byExactLabel = <String, int>{};
+  final byNormalizedLabel = <String, List<int>>{};
+  for (var i = 0; i < config.polygons.length; i++) {
+    final label = config.polygons[i].label;
+    if (label == null) continue;
+    byExactLabel[label] = i;
+    byNormalizedLabel.putIfAbsent(_normalizeLabel(label), () => []).add(i);
+  }
+
+  final resolvedColors = List<String?>.filled(config.polygons.length, null);
+  final matched = <String>[];
+  final unmatched = <String>[];
+
+  requested.forEach((requestedLabel, color) {
+    int? idx = byExactLabel[requestedLabel];
+    idx ??= byNormalizedLabel[_normalizeLabel(requestedLabel)]?.length == 1
+        ? byNormalizedLabel[_normalizeLabel(requestedLabel)]!.first
+        : null;
+    idx ??= () {
+      final norm = _normalizeLabel(requestedLabel);
+      if (norm.isEmpty) return null;
+      final candidates = <int>[];
+      for (var i = 0; i < config.polygons.length; i++) {
+        final label = config.polygons[i].label;
+        if (label == null) continue;
+        final normLabel = _normalizeLabel(label);
+        if (normLabel.contains(norm) || norm.contains(normLabel)) {
+          candidates.add(i);
+        }
+      }
+      return candidates.length == 1 ? candidates.first : null;
+    }();
+
+    if (idx == null) {
+      unmatched.add(requestedLabel);
+    } else {
+      resolvedColors[idx] = color;
+      matched.add(requestedLabel);
+    }
+  });
+
+  if (matched.isEmpty) {
+    return PolygonColorOverrideResult(config, matched, unmatched);
+  }
+
+  final newPolygons = [
+    for (var i = 0; i < config.polygons.length; i++)
+      if (resolvedColors[i] == null)
+        config.polygons[i]
+      else
+        MapPolygon(
+          points: config.polygons[i].points,
+          label: config.polygons[i].label,
+          fillColor: resolvedColors[i],
+          popupInfo: config.polygons[i].popupInfo,
+        ),
+  ];
+
+  return PolygonColorOverrideResult(
+    MapConfig(
+      centerLat: config.centerLat,
+      centerLng: config.centerLng,
+      zoom: config.zoom,
+      title: config.title,
+      markers: config.markers,
+      routes: config.routes,
+      circles: config.circles,
+      polygons: newPolygons,
+    ),
+    matched,
+    unmatched,
+  );
+}
+
+/// Finds the index of the first header column (case-insensitive, already
+/// lowercased) matching any of [names], or -1 if none match.
+int _findCsvColumn(List<String> header, List<String> names) {
+  for (final name in names) {
+    final idx = header.indexOf(name);
+    if (idx != -1) return idx;
+  }
+  return -1;
+}
+
+/// Quotes [field] for CSV output if it contains a comma, quote, or newline.
+String _csvEscape(String field) {
+  if (field.contains(',') || field.contains('"') || field.contains('\n')) {
+    return '"${field.replaceAll('"', '""')}"';
+  }
+  return field;
+}
+
+/// Resolves the label for data row [rowNumber] (1-based, among data rows):
+/// the trimmed value at [labelIdx] if present and non-empty, otherwise a
+/// synthetic `Item N` fallback. Some datasets (e.g. census mesh grids) have
+/// no name/id column at all — without this fallback those features would
+/// get a null/empty label and could never be targeted by polygon_colors.
+///
+/// Used identically by [MapConfig.fromCsvWkt] (to set MapPolygon.label) and
+/// [MapConfig.stripCsvWktGeometry] (to show the LLM the exact same value up
+/// front), so the two always agree on each feature's label.
+String _resolveRowLabel(List<String> row, int labelIdx, int rowNumber) {
+  if (labelIdx != -1 && labelIdx < row.length) {
+    final v = row[labelIdx].trim();
+    if (v.isNotEmpty) return v;
+  }
+  return 'Item $rowNumber';
+}
+
+/// Builds a default popup body ("column: value", one per line) from every
+/// non-empty column in [row] except the geometry column, using [rawHeader]
+/// (original casing) for the column names. Returns null if every remaining
+/// cell is empty.
+String? _buildAutoPopupInfo(
+  List<String> rawHeader,
+  List<String> row, {
+  required int geomIdx,
+}) {
+  final lines = <String>[];
+  for (var i = 0; i < rawHeader.length && i < row.length; i++) {
+    if (i == geomIdx) continue;
+    final value = row[i].trim();
+    if (value.isEmpty) continue;
+    lines.add('${rawHeader[i]}: $value');
+  }
+  return lines.isEmpty ? null : lines.join('\n');
 }
 
 /// Parse RFC4180-ish CSV text into rows of string cells, honoring quoted

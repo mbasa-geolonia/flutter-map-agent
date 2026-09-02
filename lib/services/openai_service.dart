@@ -25,10 +25,17 @@ class OpenAiService implements AiService {
       'For cities, use zoom 10-12. For streets/buildings, use zoom 15-18. '
       'For countries/continents, use zoom 4-7. Always show the map first. '
       'When a tool result says "GeoJSON rendered" or "CSV/WKT rendered", the '
-      'geometry is already displayed with default colors. You may call '
-      'show_map once to add markers or set polygon_fill_color — do NOT '
-      'include a polygons or routes array, as the coordinates are already '
-      'rendered and will be preserved automatically.';
+      'geometry is already displayed with placeholder colors — do NOT '
+      'include a polygons or routes array in show_map, as the coordinates '
+      'are already rendered and will be preserved automatically. For a '
+      'thematic/choropleth map, read the attribute data included in that '
+      'tool result, then call show_map with polygon_colors (one entry per '
+      'region label) so each region\'s color reflects its value. Use '
+      'polygon_fill_color only when every polygon should be the same color. '
+      'Markers, circles, and polygons from earlier show_map calls in this '
+      'conversation are preserved automatically — do NOT re-include a '
+      'marker or circle (e.g. a search-center pin or radius circle) you '
+      'already added in a previous call, as that adds a duplicate.';
 
   // OpenAI tool definition: uses "function" wrapper and "parameters" (not "input_schema")
   static const _showMapTool = {
@@ -183,10 +190,37 @@ class OpenAiService implements AiService {
             'type': 'string',
             'description':
                 'Override the fill color of ALL polygons already on the map, '
-                'including any auto-rendered GeoJSON isochrones or areas. '
-                'Use this when the user requests a specific color for an area '
-                'that was drawn by a previous tool call. Value is #RRGGBB hex '
-                '(e.g. "#43A047" for green).',
+                'including any auto-rendered GeoJSON isochrones or areas, to '
+                'the SAME single color. Use this when the user wants one '
+                'uniform color for an area drawn by a previous tool call. For '
+                'a thematic/choropleth map where color should vary per region '
+                'by value, use polygon_colors instead.',
+          },
+          'polygon_colors': {
+            'type': 'array',
+            'description':
+                'Set individual fill colors for existing polygons already on '
+                'the map (matched by their label), without redrawing them. '
+                'Use this for thematic/choropleth maps: after an auto-rendered '
+                'tool result gives you per-region attribute data, pick a color '
+                'per region here that reflects its value (e.g. darker for '
+                'higher counts).',
+            'items': {
+              'type': 'object',
+              'properties': {
+                'label': {
+                  'type': 'string',
+                  'description':
+                      'The exact label of the polygon to recolor, as given in '
+                      'the attribute data.',
+                },
+                'fill_color': {
+                  'type': 'string',
+                  'description': 'Fill color as #RRGGBB hex.',
+                },
+              },
+              'required': ['label', 'fill_color'],
+            },
           },
         },
         'required': ['center_lat', 'center_lng'],
@@ -228,6 +262,7 @@ class OpenAiService implements AiService {
       // and pushes the result to the UI.
       MapConfig mergeAutoRendered(MapConfig autoConfig) {
         final current = accumulatedMapConfig;
+        final beforeCount = current?.polygons.length ?? 0;
         final merged = current == null
             ? autoConfig
             : MapConfig(
@@ -235,12 +270,18 @@ class OpenAiService implements AiService {
                 centerLng: autoConfig.centerLng,
                 zoom: autoConfig.zoom,
                 title: autoConfig.title ?? current.title,
-                markers: [...current.markers, ...autoConfig.markers],
+                markers:
+                    dedupeMarkers([...current.markers, ...autoConfig.markers]),
                 routes: [...current.routes, ...autoConfig.routes],
-                polygons: [...current.polygons, ...autoConfig.polygons],
-                circles: [...current.circles, ...autoConfig.circles],
+                polygons: dedupePolygons(
+                    [...current.polygons, ...autoConfig.polygons]),
+                circles:
+                    dedupeCircles([...current.circles, ...autoConfig.circles]),
               );
-        lastGeoJsonPolygonCount = autoConfig.polygons.length;
+        // Recompute against the deduped result so a repeated/overlapping
+        // auto-render doesn't inflate this count with polygons that were
+        // actually merged into existing ones.
+        lastGeoJsonPolygonCount = merged.polygons.length - beforeCount;
         lastGeoJsonRouteCount = autoConfig.routes.length;
         accumulatedMapConfig = merged;
         onMap(merged);
@@ -288,9 +329,9 @@ class OpenAiService implements AiService {
             final fromTool = MapConfig.fromToolInput(toolInput);
             final polygonFillOverride =
                 toolInput['polygon_fill_color'] as String?;
-            final MapConfig mapConfig;
+            final MapConfig baseConfig;
             if (accumulatedMapConfig == null) {
-              mapConfig = fromTool;
+              baseConfig = fromTool;
             } else {
               // Closures over `accumulatedMapConfig` elsewhere in this scope
               // disable null-promotion, so bind a definitely-non-null local.
@@ -316,32 +357,56 @@ class OpenAiService implements AiService {
                   ...fromTool.polygons,
                 ];
               }
-              mapConfig = MapConfig(
+              baseConfig = MapConfig(
                 centerLat: fromTool.centerLat,
                 centerLng: fromTool.centerLng,
                 zoom: fromTool.zoom,
                 title: fromTool.title ?? current.title,
-                markers: [
-                  ...current.markers,
-                  ...fromTool.markers,
-                ],
+                // Deduped: the LLM tends to repeat "the same" marker/circle
+                // (e.g. a search-center pin or radius circle) across
+                // multiple show_map calls within one turn.
+                markers: dedupeMarkers([...current.markers, ...fromTool.markers]),
                 routes: [
                   ...current.routes,
                   ...fromTool.routes,
                 ],
-                polygons: mergedPolygons,
-                circles: [
-                  ...current.circles,
-                  ...fromTool.circles,
-                ],
+                polygons: dedupePolygons(mergedPolygons),
+                circles: dedupeCircles([...current.circles, ...fromTool.circles]),
               );
             }
             lastGeoJsonPolygonCount = 0;
             lastGeoJsonRouteCount = 0;
+            final colorResult = applyPolygonColorOverrides(
+              baseConfig,
+              toolInput['polygon_colors'] as List?,
+            );
+            final mapConfig = colorResult.config;
             accumulatedMapConfig = mapConfig;
             onMap(mapConfig);
-            result =
-                'Map updated to show: ${mapConfig.title ?? "the requested location"}';
+            final resultBuffer = StringBuffer(
+              'Map updated to show: ${mapConfig.title ?? "the requested location"}',
+            );
+            if (colorResult.matchedLabels.isNotEmpty) {
+              resultBuffer.write(
+                '. Recolored ${colorResult.matchedLabels.length} '
+                'polygon(s): ${colorResult.matchedLabels.join(", ")}',
+              );
+            }
+            if (colorResult.unmatchedLabels.isNotEmpty) {
+              final knownLabels = mapConfig.polygons
+                  .map((p) => p.label)
+                  .whereType<String>()
+                  .toSet()
+                  .join(', ');
+              resultBuffer.write(
+                '. WARNING: no polygon matched the label(s) '
+                '${colorResult.unmatchedLabels.join(", ")} — these were NOT '
+                'recolored. Known polygon labels on the map: [$knownLabels]. '
+                'Call show_map again with polygon_colors using one of these '
+                'exact labels if you still want to recolor them.',
+              );
+            }
+            result = resultBuffer.toString();
           } else if (_mcp != null && _mcp.hasTool(name)) {
             // MCP tool — forward to the MCP server
             final rawResult = await _mcp.callTool(name, toolInput);
@@ -377,19 +442,35 @@ class OpenAiService implements AiService {
                   autoConfig.routes.isNotEmpty ||
                   autoConfig.polygons.isNotEmpty;
               if (hasData) {
-                final newColors = autoConfig.polygons
-                    .map((p) => p.fillColor ?? 'default')
-                    .join(', ');
                 final merged = mergeAutoRendered(autoConfig);
-                mcpResult =
+                final buffer = StringBuffer()
+                  ..write(
                     '$sourceLabel rendered: ${autoConfig.polygons.length} new '
-                    'polygon(s) with auto-assigned color(s): [$newColors]. '
+                    'polygon(s) with placeholder color(s) assigned only for '
+                    'visual distinction. '
                     'Total on map: ${merged.polygons.length} polygon(s), '
                     '${merged.routes.length} route(s). '
-                    'To change the color of these new polygon(s), call '
-                    'show_map with polygon_fill_color. To add markers, '
-                    'include them in show_map. '
-                    'Do NOT include polygon or route coordinates.';
+                    'Do NOT include polygon or route coordinates in show_map. '
+                    'To recolor these polygons for a thematic/choropleth map '
+                    '(one color per region, by value), call show_map with '
+                    'polygon_colors — one {label, fill_color} entry per '
+                    'region below, using the exact "map_label" column value '
+                    'as label (NOT the name/id column — some datasets have '
+                    'no natural name, so map_label is always present and is '
+                    'the only value the map actually matches against). Use '
+                    'polygon_fill_color instead only if every polygon should '
+                    'be the same color. To add markers, include them in '
+                    'show_map.',
+                  );
+                if (sourceLabel == 'CSV/WKT') {
+                  buffer
+                    ..write(
+                      '\n\nAttribute data (geometry column omitted — already '
+                      'rendered):\n',
+                    )
+                    ..write(MapConfig.stripCsvWktGeometry(rawResult));
+                }
+                mcpResult = buffer.toString();
               }
             }
             result = mcpResult;
@@ -441,10 +522,14 @@ class OpenAiService implements AiService {
         )
         .timeout(const Duration(seconds: 120));
 
+    // Decode explicitly as UTF-8 rather than via response.body, which falls
+    // back to Latin-1 if the server's Content-Type lacks a charset param —
+    // silently corrupting any non-ASCII text (see mcp_service.dart).
+    final decodedBody = utf8.decode(response.bodyBytes);
     if (response.statusCode != 200) {
-      throw Exception('API error ${response.statusCode}: ${response.body}');
+      throw Exception('API error ${response.statusCode}: $decodedBody');
     }
-    return response.body;
+    return decodedBody;
   }
 
   @override

@@ -31,6 +31,40 @@ class _MapPanelState extends State<MapPanel> {
   MapConfig? _lastConfig;
   MapStyle _mapStyle = MapStyle.stdPc;
 
+  static const _polygonLabelStyle = TextStyle(
+    fontSize: 11.8,
+    fontWeight: FontWeight.w600,
+  );
+  final Map<String, double> _labelWidthCache = {};
+
+  /// Measures (and caches) how wide [label] renders at [_polygonLabelStyle].
+  double _labelWidth(String label) => _labelWidthCache.putIfAbsent(label, () {
+        final tp = TextPainter(
+          text: TextSpan(text: label, style: _polygonLabelStyle),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        return tp.width;
+      });
+
+  /// Mirrors flutter_map's own Polygon-label culling: only show a label once
+  /// the polygon is rendered wide enough on screen, at the current zoom, to
+  /// actually contain it — so labels naturally appear/disappear by zoom
+  /// level instead of cluttering the map at every zoom.
+  bool _polygonLabelFits(MapCamera camera, MapPolygon poly) {
+    if (poly.points.length < 2 || poly.label == null) return false;
+    var minLng = poly.points.first.lng;
+    var maxLng = poly.points.first.lng;
+    for (final p in poly.points) {
+      if (p.lng < minLng) minLng = p.lng;
+      if (p.lng > maxLng) maxLng = p.lng;
+    }
+    final lat = poly.centroid.latitude;
+    final left = camera.latLngToScreenPoint(LatLng(lat, minLng));
+    final right = camera.latLngToScreenPoint(LatLng(lat, maxLng));
+    final screenWidth = (right.x - left.x).abs();
+    return screenWidth > _labelWidth(poly.label!) + 12;
+  }
+
   @override
   void dispose() {
     _mapController.dispose();
@@ -219,6 +253,14 @@ class _MapPanelState extends State<MapPanel> {
               if (config.polygons.isNotEmpty)
                 PolygonLayer(
                   hitNotifier: _polygonHitNotifier,
+                  // Labels are NOT set here — flutter_map draws Polygon
+                  // labels via a raw Canvas TextPainter that bypasses the
+                  // widget tree, and on this engine that path fails to
+                  // resolve CJK system-font fallback (tofu boxes for
+                  // Japanese labels) even with fontFamilyFallback set
+                  // explicitly. Rendered instead as a widget-based Marker
+                  // overlay below, the same mechanism point markers use,
+                  // which does render Japanese correctly.
                   polygons: config.polygons
                       .where((poly) => poly.points.length >= 3)
                       .map(
@@ -227,38 +269,36 @@ class _MapPanelState extends State<MapPanel> {
                           color: poly.resolvedFillColor,
                           borderColor: Colors.black12,
                           borderStrokeWidth: 1.5,
-                          label: poly.label,
                           hitValue: poly,
-                          labelStyle: const TextStyle(
-                            color: Colors.black,
-                            fontSize: 11.8,
-                            shadows: [
-                              // Create a 360-degree halo effect using 4-8 shadows
-                              Shadow(
-                                blurRadius: 2.0,
-                                color: Colors.white,
-                                offset: Offset(1.0, 1.0),
-                              ),
-                              Shadow(
-                                blurRadius: 2.0,
-                                color: Colors.white,
-                                offset: Offset(-1.0, 1.0),
-                              ),
-                              Shadow(
-                                blurRadius: 2.0,
-                                color: Colors.white,
-                                offset: Offset(1.0, -1.0),
-                              ),
-                              Shadow(
-                                blurRadius: 2.0,
-                                color: Colors.white,
-                                offset: Offset(-1.0, -1.0),
-                              ),
-                            ],
-                          ),
                         ),
                       )
                       .toList(),
+                ),
+              if (config.polygons.isNotEmpty)
+                Builder(
+                  builder: (innerContext) {
+                    final camera = MapCamera.of(innerContext);
+                    final visible = config.polygons.where(
+                      (poly) =>
+                          poly.points.length >= 3 &&
+                          (poly.label?.isNotEmpty ?? false) &&
+                          _polygonLabelFits(camera, poly),
+                    );
+                    return MarkerLayer(
+                      markers: visible
+                          .map(
+                            (poly) => Marker(
+                              point: poly.centroid,
+                              width: 160,
+                              height: 24,
+                              child: IgnorePointer(
+                                child: _PolygonLabelWidget(label: poly.label!),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    );
+                  },
                 ),
               if (config.routes.isNotEmpty)
                 PolylineLayer(
@@ -340,6 +380,39 @@ class _MarkerWidget extends StatelessWidget {
         ),
         Icon(Icons.location_pin, color: color, size: 30),
       ],
+    );
+  }
+}
+
+/// A polygon's label, centered at its centroid. Rendered as a plain widget
+/// [Text] — the same mechanism [_MarkerWidget] uses — rather than through
+/// flutter_map's built-in Polygon labelStyle, which draws via a raw Canvas
+/// TextPainter that fails to resolve CJK glyphs on this engine.
+class _PolygonLabelWidget extends StatelessWidget {
+  final String label;
+
+  const _PolygonLabelWidget({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Text(
+        label,
+        textAlign: TextAlign.center,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: Colors.black,
+          fontSize: 11.8,
+          fontWeight: FontWeight.w600,
+          shadows: [
+            // Create a 360-degree halo effect using 4-8 shadows
+            Shadow(blurRadius: 2.0, color: Colors.white, offset: Offset(1.0, 1.0)),
+            Shadow(blurRadius: 2.0, color: Colors.white, offset: Offset(-1.0, 1.0)),
+            Shadow(blurRadius: 2.0, color: Colors.white, offset: Offset(1.0, -1.0)),
+            Shadow(blurRadius: 2.0, color: Colors.white, offset: Offset(-1.0, -1.0)),
+          ],
+        ),
+      ),
     );
   }
 }

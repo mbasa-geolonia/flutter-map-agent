@@ -134,7 +134,7 @@ class McpService {
       'id': id,
     });
 
-    if (response.body.trim().isEmpty) return {};
+    if (response.bodyBytes.isEmpty) return {};
 
     final decoded = _decodeBody(response);
     if (decoded.containsKey('error')) {
@@ -170,15 +170,22 @@ class McpService {
     if (response.statusCode == 202) return response;
 
     if (response.statusCode != 200) {
-      throw Exception('[MCP] HTTP ${response.statusCode}: ${response.body}');
+      throw Exception(
+          '[MCP] HTTP ${response.statusCode}: ${utf8.decode(response.bodyBytes)}');
     }
     return response;
   }
 
   /// Decode either a plain `application/json` body or the first SSE `data:` line.
+  ///
+  /// Uses `bodyBytes` decoded explicitly as UTF-8, NOT `response.body` — the
+  /// MCP server's `text/event-stream` responses have no `charset` parameter
+  /// in their Content-Type, and `http.Response.body` silently falls back to
+  /// Latin-1 in that case, corrupting every multi-byte character (e.g.
+  /// Japanese text) into mojibake.
   Map<String, dynamic> _decodeBody(http.Response response) {
     final contentType = response.headers['content-type'] ?? '';
-    final body = response.body.trim();
+    final body = utf8.decode(response.bodyBytes).trim();
 
     if (contentType.contains('text/event-stream')) {
       for (final line in body.split('\n')) {
