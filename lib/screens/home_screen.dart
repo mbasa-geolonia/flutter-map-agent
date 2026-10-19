@@ -14,7 +14,7 @@ import '../widgets/map_panel.dart';
 enum AiProvider { claude, openAi }
 
 class AppState extends ChangeNotifier {
-  AiProvider _aiProvider = AiProvider.openAi;
+  AiProvider _aiProvider = AiProvider.claude;
   McpService? _mcp;
   late AiService _service;
 
@@ -27,7 +27,7 @@ class AppState extends ChangeNotifier {
 
   AppState() {
     // Start without MCP so the app is immediately usable
-    _service = OpenAiService();
+    _service = _buildService(_aiProvider);
     // Attempt to connect to the MCP server in the background
     _initMcp();
   }
