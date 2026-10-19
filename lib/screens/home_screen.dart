@@ -36,7 +36,10 @@ class AppState extends ChangeNotifier {
   /// On success, recreates the active service so MCP tools are available.
   /// On failure, the app continues to work without MCP (graceful degradation).
   Future<void> _initMcp() async {
-    final mcp = McpService(serverUrl: AppConfig.mcpServerUrl);
+    final mcp = McpService(
+      serverUrl: AppConfig.mcpServerUrl,
+      apiKey: AppConfig.mcpApiKey,
+    );
     try {
       await mcp.initialize();
       _mcp = mcp;

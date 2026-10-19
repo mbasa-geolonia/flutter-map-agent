@@ -28,11 +28,16 @@ class McpTool {
 class McpService {
   final String serverUrl;
 
+  /// Per-user API key, sent as `Authorization: Bearer <apiKey>`.
+  /// Issue one with `./manage_keys.py issue --user <you> --label <device>`
+  /// on the MCP server and set it in [AppConfig.mcpApiKey].
+  final String? apiKey;
+
   String? _sessionId;
   List<McpTool> _tools = const [];
   int _nextId = 1;
 
-  McpService({required this.serverUrl});
+  McpService({required this.serverUrl, this.apiKey});
 
   /// True after [initialize] completes successfully.
   bool get isReady => _sessionId != null;
@@ -155,6 +160,9 @@ class McpService {
       'Accept': 'application/json, text/event-stream',
     };
     if (_sessionId != null) headers['Mcp-Session-Id'] = _sessionId!;
+    if (apiKey != null && apiKey!.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $apiKey';
+    }
 
     final response = await http.post(
       Uri.parse(serverUrl),
@@ -168,6 +176,17 @@ class McpService {
 
     // 202 Accepted is the expected response for notifications
     if (response.statusCode == 202) return response;
+
+    if (response.statusCode == 401) {
+      throw Exception(
+          '[MCP] HTTP 401 Unauthorized: missing or invalid API key. '
+          'Set AppConfig.mcpApiKey to a key issued with '
+          './manage_keys.py issue --user <you> --label <device>.');
+    }
+    if (response.statusCode == 403) {
+      throw Exception(
+          '[MCP] HTTP 403 Forbidden: API key lacks the required scope.');
+    }
 
     if (response.statusCode != 200) {
       throw Exception(

@@ -13,4 +13,9 @@ abstract final class AppConfig {
 
   /// MCP server URL (Streamable HTTP transport).
   static const String mcpServerUrl = 'http://localhost:8888/mcp';
+
+  /// Per-user MCP API key, sent as `Authorization: Bearer <mcpApiKey>`.
+  /// Issue one on the MCP server with:
+  ///   ./manage_keys.py issue --user <you> --label <device>
+  static const String mcpApiKey = 'MCP_API_KEY';
 }
