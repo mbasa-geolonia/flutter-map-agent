@@ -7,6 +7,15 @@ abstract final class AppConfig {
   static const String openAiApiKey =
       'OPENAI_API_KEY';
 
+  /// Claude model used by ClaudeService.
+  static const String claudeModel = 'claude-opus-4-6';
+
+  /// OpenAI model used by OpenAiService.
+  static const String openAiModel = 'gpt-6.1-sol';
+
+  /// OpenAI reasoning effort: 'none', 'low', 'medium', or 'high'.
+  static const String openAiReasoningEffort = 'medium';
+
   /// MapFan tile API key.
   static const String mapfanApiKey =
       'MAPFAN_API_KEY';

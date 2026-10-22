@@ -118,11 +118,9 @@ class McpService {
   List<Map<String, dynamic>> toOpenAiTools() => _tools
       .map((t) => {
             'type': 'function',
-            'function': {
-              'name': t.name,
-              'description': t.description,
-              'parameters': t.inputSchema,
-            },
+            'name': t.name,
+            'description': t.description,
+            'parameters': t.inputSchema,
           })
       .toList();
 

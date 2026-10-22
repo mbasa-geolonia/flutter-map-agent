@@ -7,8 +7,8 @@ import 'ai_service.dart';
 import 'mcp_service.dart';
 
 class OpenAiService implements AiService {
-  static const _apiUrl = 'https://api.openai.com/v1/chat/completions';
-  static const _model = 'gpt-4o';
+  static const _apiUrl = 'https://api.openai.com/v1/responses';
+  static const _model = AppConfig.openAiModel;
   static const String _apiKey = AppConfig.openAiApiKey;
 
   final McpService? _mcp;
@@ -37,194 +37,192 @@ class OpenAiService implements AiService {
       'marker or circle (e.g. a search-center pin or radius circle) you '
       'already added in a previous call, as that adds a duplicate.';
 
-  // OpenAI tool definition: uses "function" wrapper and "parameters" (not "input_schema")
+  // OpenAI Responses API tool definition: flat "name"/"parameters" (not "input_schema")
   static const _showMapTool = {
     'type': 'function',
-    'function': {
-      'name': 'show_map',
-      'description':
-          'Update the interactive map panel to show a specific location with '
-          'optional markers, polygons, and routes. Call this whenever any '
-          'geographic visualization would help the user understand a location.',
-      'parameters': {
-        'type': 'object',
-        'properties': {
-          'center_lat': {
-            'type': 'number',
-            'description': 'Latitude of the map center (-90 to 90)',
-          },
-          'center_lng': {
-            'type': 'number',
-            'description': 'Longitude of the map center (-180 to 180)',
-          },
-          'zoom': {
-            'type': 'number',
-            'description':
-                'Zoom level: 1=world, 4=continent, 7=country, 10=city, 13=district, 15=street, 18=building',
-          },
-          'title': {
-            'type': 'string',
-            'description': 'Title shown in the map panel header',
-          },
-          'markers': {
-            'type': 'array',
-            'description': 'Points of interest to pin on the map',
-            'items': {
-              'type': 'object',
-              'properties': {
-                'lat': {'type': 'number', 'description': 'Latitude'},
-                'lng': {'type': 'number', 'description': 'Longitude'},
-                'label': {
-                  'type': 'string',
-                  'description': 'Text label shown on the pin',
-                },
-                'color': {
-                  'type': 'string',
-                  'description':
-                      'Pin color as #RRGGBB hex (e.g. "#E53935"). '
-                      'Use consistent colors per category for thematic maps.',
-                },
+    'name': 'show_map',
+    'description':
+        'Update the interactive map panel to show a specific location with '
+        'optional markers, polygons, and routes. Call this whenever any '
+        'geographic visualization would help the user understand a location.',
+    'parameters': {
+      'type': 'object',
+      'properties': {
+        'center_lat': {
+          'type': 'number',
+          'description': 'Latitude of the map center (-90 to 90)',
+        },
+        'center_lng': {
+          'type': 'number',
+          'description': 'Longitude of the map center (-180 to 180)',
+        },
+        'zoom': {
+          'type': 'number',
+          'description':
+              'Zoom level: 1=world, 4=continent, 7=country, 10=city, 13=district, 15=street, 18=building',
+        },
+        'title': {
+          'type': 'string',
+          'description': 'Title shown in the map panel header',
+        },
+        'markers': {
+          'type': 'array',
+          'description': 'Points of interest to pin on the map',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'lat': {'type': 'number', 'description': 'Latitude'},
+              'lng': {'type': 'number', 'description': 'Longitude'},
+              'label': {
+                'type': 'string',
+                'description': 'Text label shown on the pin',
               },
-              'required': ['lat', 'lng', 'label'],
-            },
-          },
-          'polygons': {
-            'type': 'array',
-            'description': 'Filled polygon shapes for regions, districts, or areas',
-            'items': {
-              'type': 'object',
-              'properties': {
-                'points': {
-                  'type': 'array',
-                  'items': {
-                    'type': 'object',
-                    'properties': {
-                      'lat': {'type': 'number'},
-                      'lng': {'type': 'number'},
-                    },
-                    'required': ['lat', 'lng'],
-                  },
-                },
-                'label': {'type': 'string'},
-                'fill_color': {
-                  'type': 'string',
-                  'description':
-                      'Fill color as #RRGGBB hex (e.g. "#FF9800"). '
-                      'A semi-transparent fill is applied automatically.',
-                },
-                'popup_info': {
-                  'type': 'string',
-                  'description':
-                      'Informational text shown in a popup when the user taps '
-                      'this polygon. Include relevant details such as area name, '
-                      'statistics, descriptions, or any other useful information.',
-                },
+              'color': {
+                'type': 'string',
+                'description':
+                    'Pin color as #RRGGBB hex (e.g. "#E53935"). '
+                    'Use consistent colors per category for thematic maps.',
               },
-              'required': ['points'],
             },
-          },
-          'routes': {
-            'type': 'array',
-            'description': 'Polyline paths or routes between locations',
-            'items': {
-              'type': 'object',
-              'properties': {
-                'points': {
-                  'type': 'array',
-                  'items': {
-                    'type': 'object',
-                    'properties': {
-                      'lat': {'type': 'number'},
-                      'lng': {'type': 'number'},
-                    },
-                    'required': ['lat', 'lng'],
-                  },
-                },
-                'color': {
-                  'type': 'string',
-                  'description':
-                      'Route stroke color as #RRGGBB hex (e.g. "#43A047").',
-                },
-              },
-              'required': ['points'],
-            },
-          },
-          'circles': {
-            'type': 'array',
-            'description': 'Radius circles for showing coverage or proximity areas',
-            'items': {
-              'type': 'object',
-              'properties': {
-                'lat': {
-                  'type': 'number',
-                  'description': 'Center latitude of the circle',
-                },
-                'lng': {
-                  'type': 'number',
-                  'description': 'Center longitude of the circle',
-                },
-                'radius_m': {
-                  'type': 'number',
-                  'description': 'Radius in meters (e.g. 500 for 500 m)',
-                },
-                'label': {
-                  'type': 'string',
-                  'description': 'Optional label for the circle',
-                },
-                'fill_color': {
-                  'type': 'string',
-                  'description':
-                      'Fill color as #RRGGBB hex (e.g. "#1E88E5"). '
-                      'A semi-transparent fill is applied automatically.',
-                },
-                'stroke_color': {
-                  'type': 'string',
-                  'description':
-                      'Border color as #RRGGBB hex. Defaults to fill_color if omitted.',
-                },
-              },
-              'required': ['lat', 'lng', 'radius_m'],
-            },
-          },
-          'polygon_fill_color': {
-            'type': 'string',
-            'description':
-                'Override the fill color of ALL polygons already on the map, '
-                'including any auto-rendered GeoJSON isochrones or areas, to '
-                'the SAME single color. Use this when the user wants one '
-                'uniform color for an area drawn by a previous tool call. For '
-                'a thematic/choropleth map where color should vary per region '
-                'by value, use polygon_colors instead.',
-          },
-          'polygon_colors': {
-            'type': 'array',
-            'description':
-                'Set individual fill colors for existing polygons already on '
-                'the map (matched by their label), without redrawing them. '
-                'Use this for thematic/choropleth maps: after an auto-rendered '
-                'tool result gives you per-region attribute data, pick a color '
-                'per region here that reflects its value (e.g. darker for '
-                'higher counts).',
-            'items': {
-              'type': 'object',
-              'properties': {
-                'label': {
-                  'type': 'string',
-                  'description':
-                      'The exact label of the polygon to recolor, as given in '
-                      'the attribute data.',
-                },
-                'fill_color': {
-                  'type': 'string',
-                  'description': 'Fill color as #RRGGBB hex.',
-                },
-              },
-              'required': ['label', 'fill_color'],
-            },
+            'required': ['lat', 'lng', 'label'],
           },
         },
-        'required': ['center_lat', 'center_lng'],
+        'polygons': {
+          'type': 'array',
+          'description': 'Filled polygon shapes for regions, districts, or areas',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'points': {
+                'type': 'array',
+                'items': {
+                  'type': 'object',
+                  'properties': {
+                    'lat': {'type': 'number'},
+                    'lng': {'type': 'number'},
+                  },
+                  'required': ['lat', 'lng'],
+                },
+              },
+              'label': {'type': 'string'},
+              'fill_color': {
+                'type': 'string',
+                'description':
+                    'Fill color as #RRGGBB hex (e.g. "#FF9800"). '
+                    'A semi-transparent fill is applied automatically.',
+              },
+              'popup_info': {
+                'type': 'string',
+                'description':
+                    'Informational text shown in a popup when the user taps '
+                    'this polygon. Include relevant details such as area name, '
+                    'statistics, descriptions, or any other useful information.',
+              },
+            },
+            'required': ['points'],
+          },
+        },
+        'routes': {
+          'type': 'array',
+          'description': 'Polyline paths or routes between locations',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'points': {
+                'type': 'array',
+                'items': {
+                  'type': 'object',
+                  'properties': {
+                    'lat': {'type': 'number'},
+                    'lng': {'type': 'number'},
+                  },
+                  'required': ['lat', 'lng'],
+                },
+              },
+              'color': {
+                'type': 'string',
+                'description':
+                    'Route stroke color as #RRGGBB hex (e.g. "#43A047").',
+              },
+            },
+            'required': ['points'],
+          },
+        },
+        'circles': {
+          'type': 'array',
+          'description': 'Radius circles for showing coverage or proximity areas',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'lat': {
+                'type': 'number',
+                'description': 'Center latitude of the circle',
+              },
+              'lng': {
+                'type': 'number',
+                'description': 'Center longitude of the circle',
+              },
+              'radius_m': {
+                'type': 'number',
+                'description': 'Radius in meters (e.g. 500 for 500 m)',
+              },
+              'label': {
+                'type': 'string',
+                'description': 'Optional label for the circle',
+              },
+              'fill_color': {
+                'type': 'string',
+                'description':
+                    'Fill color as #RRGGBB hex (e.g. "#1E88E5"). '
+                    'A semi-transparent fill is applied automatically.',
+              },
+              'stroke_color': {
+                'type': 'string',
+                'description':
+                    'Border color as #RRGGBB hex. Defaults to fill_color if omitted.',
+              },
+            },
+            'required': ['lat', 'lng', 'radius_m'],
+          },
+        },
+        'polygon_fill_color': {
+          'type': 'string',
+          'description':
+              'Override the fill color of ALL polygons already on the map, '
+              'including any auto-rendered GeoJSON isochrones or areas, to '
+              'the SAME single color. Use this when the user wants one '
+              'uniform color for an area drawn by a previous tool call. For '
+              'a thematic/choropleth map where color should vary per region '
+              'by value, use polygon_colors instead.',
+        },
+        'polygon_colors': {
+          'type': 'array',
+          'description':
+              'Set individual fill colors for existing polygons already on '
+              'the map (matched by their label), without redrawing them. '
+              'Use this for thematic/choropleth maps: after an auto-rendered '
+              'tool result gives you per-region attribute data, pick a color '
+              'per region here that reflects its value (e.g. darker for '
+              'higher counts).',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'label': {
+                'type': 'string',
+                'description':
+                    'The exact label of the polygon to recolor, as given in '
+                    'the attribute data.',
+              },
+              'fill_color': {
+                'type': 'string',
+                'description': 'Fill color as #RRGGBB hex.',
+              },
+            },
+            'required': ['label', 'fill_color'],
+          },
+        },
       },
+      'required': ['center_lat', 'center_lng'],
     },
   };
 
@@ -296,28 +294,32 @@ class OpenAiService implements AiService {
       while (true) {
         final responseBody = await _callApi(tools);
         final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
-        final choice =
-            (decoded['choices'] as List).first as Map<String, dynamic>;
-        final message = choice['message'] as Map<String, dynamic>;
-        final finishReason = choice['finish_reason'] as String;
+        final output = (decoded['output'] as List).cast<Map<String, dynamic>>();
 
-        textAccumulator += message['content'] as String? ?? '';
+        // Append every output item (reasoning, message, function_call) so the
+        // next request carries the model's reasoning along with its calls.
+        _history.addAll(output);
 
-        // Append assistant message (includes tool_calls if present)
-        _history.add(message);
+        for (final item in output) {
+          if (item['type'] != 'message') continue;
+          for (final part in (item['content'] as List? ?? [])) {
+            if (part['type'] == 'output_text') {
+              textAccumulator += part['text'] as String? ?? '';
+            }
+          }
+        }
 
-        if (finishReason != 'tool_calls') break;
+        final toolCalls =
+            output.where((item) => item['type'] == 'function_call').toList();
+        if (toolCalls.isEmpty) break;
 
         // Dispatch every tool call in this turn
-        final toolCalls = (message['tool_calls'] as List?) ?? [];
-        for (final toolCall in toolCalls) {
-          final tc = toolCall as Map<String, dynamic>;
-          final fn = tc['function'] as Map<String, dynamic>;
-          final name = fn['name'] as String;
+        for (final tc in toolCalls) {
+          final name = tc['name'] as String;
           // OpenAI returns arguments as a JSON string — decode it
           final toolInput =
-              jsonDecode(fn['arguments'] as String) as Map<String, dynamic>;
-          final toolCallId = tc['id'] as String;
+              jsonDecode(tc['arguments'] as String) as Map<String, dynamic>;
+          final toolCallId = tc['call_id'] as String;
 
           final String result;
           if (name == 'show_map') {
@@ -478,11 +480,11 @@ class OpenAiService implements AiService {
             result = 'Tool "$name" is not available.';
           }
 
-          // OpenAI expects role: "tool" with matching tool_call_id
+          // Responses API expects a function_call_output with matching call_id
           _history.add({
-            'role': 'tool',
-            'tool_call_id': toolCallId,
-            'content': result,
+            'type': 'function_call_output',
+            'call_id': toolCallId,
+            'output': result,
           });
         }
       }
@@ -499,16 +501,14 @@ class OpenAiService implements AiService {
   }
 
   Future<String> _callApi(List<Map<String, dynamic>> tools) async {
-    final messages = [
-      {'role': 'system', 'content': _systemPrompt},
-      ..._history,
-    ];
-
     final body = jsonEncode({
       'model': _model,
-      'max_tokens': 8192,
+      'instructions': _systemPrompt,
+      // Includes reasoning tokens, so leave headroom beyond the visible reply.
+      'max_output_tokens': 16384,
+      'reasoning': {'effort': AppConfig.openAiReasoningEffort},
       'tools': tools,
-      'messages': messages,
+      'input': _history,
     });
 
     final response = await http

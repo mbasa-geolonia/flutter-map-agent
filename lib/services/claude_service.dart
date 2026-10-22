@@ -8,7 +8,7 @@ import 'mcp_service.dart';
 
 class ClaudeService implements AiService {
   static const _apiUrl = 'https://api.anthropic.com/v1/messages';
-  static const _model = 'claude-opus-4-6';
+  static const _model = AppConfig.claudeModel;
   static const String _apiKey = AppConfig.anthropicApiKey;
 
   final McpService? _mcp;
