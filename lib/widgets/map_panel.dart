@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolonia_design_tokens/geolonia_design_tokens.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+
 import '../config/app_config.dart';
 import '../models/map_config.dart';
 import '../screens/home_screen.dart';
@@ -25,13 +27,68 @@ class MapPanel extends StatefulWidget {
 
 class _MapPanelState extends State<MapPanel> {
   final _mapController = MapController();
+  final LayerHitNotifier<MapPolygon> _polygonHitNotifier = ValueNotifier(null);
   MapConfig? _lastConfig;
   MapStyle _mapStyle = MapStyle.stdPc;
+
+  static const _polygonLabelStyle = TextStyle(
+    fontSize: 11.8,
+    fontWeight: FontWeight.w600,
+  );
+  final Map<String, double> _labelWidthCache = {};
+
+  /// Measures (and caches) how wide [label] renders at [_polygonLabelStyle].
+  double _labelWidth(String label) => _labelWidthCache.putIfAbsent(label, () {
+        final tp = TextPainter(
+          text: TextSpan(text: label, style: _polygonLabelStyle),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        return tp.width;
+      });
+
+  /// Mirrors flutter_map's own Polygon-label culling: only show a label once
+  /// the polygon is rendered wide enough on screen, at the current zoom, to
+  /// actually contain it — so labels naturally appear/disappear by zoom
+  /// level instead of cluttering the map at every zoom.
+  bool _polygonLabelFits(MapCamera camera, MapPolygon poly) {
+    if (poly.points.length < 2 || poly.label == null) return false;
+    var minLng = poly.points.first.lng;
+    var maxLng = poly.points.first.lng;
+    for (final p in poly.points) {
+      if (p.lng < minLng) minLng = p.lng;
+      if (p.lng > maxLng) maxLng = p.lng;
+    }
+    final lat = poly.centroid.latitude;
+    final left = camera.latLngToScreenPoint(LatLng(lat, minLng));
+    final right = camera.latLngToScreenPoint(LatLng(lat, maxLng));
+    final screenWidth = (right.x - left.x).abs();
+    return screenWidth > _labelWidth(poly.label!) + 12;
+  }
 
   @override
   void dispose() {
     _mapController.dispose();
     super.dispose();
+  }
+
+  void _showPolygonPopup(MapPolygon polygon) {
+    if (polygon.popupInfo == null) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(GeoloniaRadii.card),
+        ),
+        title: Text(polygon.label ?? 'Area Info'),
+        content: SingleChildScrollView(child: Text(polygon.popupInfo!)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _animateTo(MapConfig config) {
@@ -77,13 +134,16 @@ class _MapPanelState extends State<MapPanel> {
           decoration: BoxDecoration(
             color: theme.colorScheme.surface,
             border: Border(
-              bottom: BorderSide(color: theme.dividerColor),
+              bottom: BorderSide(color: theme.colorScheme.outline),
             ),
           ),
           child: Row(
             children: [
-              Icon(Icons.map_outlined,
-                  color: theme.colorScheme.primary, size: 22),
+              Icon(
+                Icons.map_outlined,
+                color: theme.colorScheme.primary,
+                size: 22,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -95,26 +155,35 @@ class _MapPanelState extends State<MapPanel> {
                 ),
               ),
               if (config.markers.isNotEmpty) ...[
-                Chip(
-                  label: Text('${config.markers.length} marker'
-                      '${config.markers.length == 1 ? '' : 's'}'),
-                  avatar: const Icon(Icons.place, size: 14),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  labelPadding:
-                      const EdgeInsets.symmetric(horizontal: 4),
+                _StatBadge(
+                  icon: Icons.place,
+                  label:
+                      '${config.markers.length} marker'
+                      '${config.markers.length == 1 ? '' : 's'}',
+                  surface: GeoloniaColors.statusInfoSurface,
+                  text: GeoloniaColors.statusInfoText,
                 ),
                 const SizedBox(width: 6),
               ],
               if (config.routes.isNotEmpty) ...[
-                Chip(
-                  label: Text('${config.routes.length} route'
-                      '${config.routes.length == 1 ? '' : 's'}'),
-                  avatar: const Icon(Icons.route, size: 14),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  labelPadding:
-                      const EdgeInsets.symmetric(horizontal: 4),
+                _StatBadge(
+                  icon: Icons.route,
+                  label:
+                      '${config.routes.length} route'
+                      '${config.routes.length == 1 ? '' : 's'}',
+                  surface: GeoloniaColors.statusSuccessSurface,
+                  text: GeoloniaColors.statusSuccessText,
+                ),
+                const SizedBox(width: 6),
+              ],
+              if (config.circles.isNotEmpty) ...[
+                _StatBadge(
+                  icon: Icons.circle_outlined,
+                  label:
+                      '${config.circles.length} circle'
+                      '${config.circles.length == 1 ? '' : 's'}',
+                  surface: GeoloniaColors.statusWarningSurface,
+                  text: GeoloniaColors.statusWarningText,
                 ),
                 const SizedBox(width: 6),
               ],
@@ -123,13 +192,17 @@ class _MapPanelState extends State<MapPanel> {
                 child: DropdownButton<MapStyle>(
                   value: _mapStyle,
                   isDense: true,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(GeoloniaRadii.control),
                   items: MapStyle.values
-                      .map((s) => DropdownMenuItem(
-                            value: s,
-                            child: Text(s.label,
-                                style: const TextStyle(fontSize: 13)),
-                          ))
+                      .map(
+                        (s) => DropdownMenuItem(
+                          value: s,
+                          child: Text(
+                            s.label,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      )
                       .toList(),
                   onChanged: (s) {
                     if (s != null) setState(() => _mapStyle = s);
@@ -144,11 +217,16 @@ class _MapPanelState extends State<MapPanel> {
           child: FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter:
-                  LatLng(config.centerLat, config.centerLng),
+              initialCenter: LatLng(config.centerLat, config.centerLng),
               initialZoom: config.zoom,
               minZoom: 2,
               maxZoom: 19,
+              onTap: (tapPos, latLng) {
+                final hit = _polygonHitNotifier.value;
+                if (hit != null && hit.hitValues.isNotEmpty) {
+                  _showPolygonPopup(hit.hitValues.first);
+                }
+              },
             ),
             children: [
               TileLayer(
@@ -157,32 +235,80 @@ class _MapPanelState extends State<MapPanel> {
                 userAgentPackageName: 'com.example.flutter_map_agent',
                 maxNativeZoom: 19,
               ),
-              if (config.polygons.isNotEmpty)
-                PolygonLayer(
-                  polygons: config.polygons
+              if (config.circles.isNotEmpty)
+                CircleLayer(
+                  circles: config.circles
                       .map(
-                        (poly) => Polygon(
-                          points: poly.points
-                              .map((p) => p.latLng)
-                              .toList(),
-                          color: Colors.orange.withAlpha(120),
-                          borderColor: Colors.deepOrange,
-                          borderStrokeWidth: 3,
-                          label: poly.label,
+                        (c) => CircleMarker(
+                          point: c.latLng,
+                          radius: c.radiusMeters,
+                          useRadiusInMeter: true,
+                          color: c.resolvedFillColor,
+                          borderColor: c.resolvedStrokeColor,
+                          borderStrokeWidth: 1.5,
                         ),
                       )
                       .toList(),
                 ),
+              if (config.polygons.isNotEmpty)
+                PolygonLayer(
+                  hitNotifier: _polygonHitNotifier,
+                  // Labels are NOT set here — flutter_map draws Polygon
+                  // labels via a raw Canvas TextPainter that bypasses the
+                  // widget tree, and on this engine that path fails to
+                  // resolve CJK system-font fallback (tofu boxes for
+                  // Japanese labels) even with fontFamilyFallback set
+                  // explicitly. Rendered instead as a widget-based Marker
+                  // overlay below, the same mechanism point markers use,
+                  // which does render Japanese correctly.
+                  polygons: config.polygons
+                      .where((poly) => poly.points.length >= 3)
+                      .map(
+                        (poly) => Polygon(
+                          points: poly.points.map((p) => p.latLng).toList(),
+                          color: poly.resolvedFillColor,
+                          borderColor: Colors.black12,
+                          borderStrokeWidth: 1.5,
+                          hitValue: poly,
+                        ),
+                      )
+                      .toList(),
+                ),
+              if (config.polygons.isNotEmpty)
+                Builder(
+                  builder: (innerContext) {
+                    final camera = MapCamera.of(innerContext);
+                    final visible = config.polygons.where(
+                      (poly) =>
+                          poly.points.length >= 3 &&
+                          (poly.label?.isNotEmpty ?? false) &&
+                          _polygonLabelFits(camera, poly),
+                    );
+                    return MarkerLayer(
+                      markers: visible
+                          .map(
+                            (poly) => Marker(
+                              point: poly.centroid,
+                              width: 160,
+                              height: 24,
+                              child: IgnorePointer(
+                                child: _PolygonLabelWidget(label: poly.label!),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    );
+                  },
+                ),
               if (config.routes.isNotEmpty)
                 PolylineLayer(
                   polylines: config.routes
+                      .where((route) => route.points.length >= 2)
                       .map(
                         (route) => Polyline(
-                          points: route
-                              .map((p) => p.latLng)
-                              .toList(),
-                          strokeWidth: 4,
-                          color: Colors.deepOrange,
+                          points: route.points.map((p) => p.latLng).toList(),
+                          strokeWidth: 6,
+                          color: route.resolvedColor,
                         ),
                       )
                       .toList(),
@@ -196,17 +322,17 @@ class _MapPanelState extends State<MapPanel> {
                           width: 130,
                           height: 60,
                           alignment: Alignment.topCenter,
-                          child: _MarkerWidget(label: m.label),
+                          child: _MarkerWidget(
+                            label: m.label,
+                            color: m.pinColor,
+                          ),
                         ),
                       )
                       .toList(),
                 ),
               const RichAttributionWidget(
                 attributions: [
-                  TextSourceAttribution(
-                    'MapFan',
-                    prependCopyright: true,
-                  ),
+                  TextSourceAttribution('MapFan', prependCopyright: true),
                 ],
               ),
             ],
@@ -219,8 +345,9 @@ class _MapPanelState extends State<MapPanel> {
 
 class _MarkerWidget extends StatelessWidget {
   final String label;
+  final Color color;
 
-  const _MarkerWidget({required this.label});
+  const _MarkerWidget({required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -228,11 +355,11 @@ class _MarkerWidget extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: color.withAlpha(80), width: 1),
             boxShadow: const [
               BoxShadow(
                 blurRadius: 6,
@@ -251,8 +378,84 @@ class _MarkerWidget extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        const Icon(Icons.location_pin, color: Colors.red, size: 30),
+        Icon(Icons.location_pin, color: color, size: 30),
       ],
+    );
+  }
+}
+
+/// A polygon's label, centered at its centroid. Rendered as a plain widget
+/// [Text] — the same mechanism [_MarkerWidget] uses — rather than through
+/// flutter_map's built-in Polygon labelStyle, which draws via a raw Canvas
+/// TextPainter that fails to resolve CJK glyphs on this engine.
+class _PolygonLabelWidget extends StatelessWidget {
+  final String label;
+
+  const _PolygonLabelWidget({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Text(
+        label,
+        textAlign: TextAlign.center,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: Colors.black,
+          fontSize: 11.8,
+          fontWeight: FontWeight.w600,
+          shadows: [
+            // Create a 360-degree halo effect using 4-8 shadows
+            Shadow(blurRadius: 2.0, color: Colors.white, offset: Offset(1.0, 1.0)),
+            Shadow(blurRadius: 2.0, color: Colors.white, offset: Offset(-1.0, 1.0)),
+            Shadow(blurRadius: 2.0, color: Colors.white, offset: Offset(1.0, -1.0)),
+            Shadow(blurRadius: 2.0, color: Colors.white, offset: Offset(-1.0, -1.0)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatBadge extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color surface;
+  final Color text;
+
+  const _StatBadge({
+    required this.icon,
+    required this.label,
+    required this.surface,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: GeoloniaSpacing.space2,
+        vertical: GeoloniaSpacing.space1,
+      ),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(GeoloniaRadii.tight),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: text),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: GeoloniaFontWeights.bold,
+              color: text,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -7,7 +7,24 @@ abstract final class AppConfig {
   static const String openAiApiKey =
       'OPENAI_API_KEY';
 
+  /// Claude model used by ClaudeService.
+  static const String claudeModel = 'claude-opus-4-6';
+
+  /// OpenAI model used by OpenAiService.
+  static const String openAiModel = 'gpt-6.1-sol';
+
+  /// OpenAI reasoning effort: 'none', 'low', 'medium', or 'high'.
+  static const String openAiReasoningEffort = 'medium';
+
   /// MapFan tile API key.
   static const String mapfanApiKey =
       'MAPFAN_API_KEY';
+
+  /// MCP server URL (Streamable HTTP transport).
+  static const String mcpServerUrl = 'http://localhost:8888/mcp';
+
+  /// Per-user MCP API key, sent as `Authorization: Bearer <mcpApiKey>`.
+  /// Issue one on the MCP server with:
+  ///   ./manage_keys.py issue --user <you> --label <device>
+  static const String mcpApiKey = 'MCP_API_KEY';
 }

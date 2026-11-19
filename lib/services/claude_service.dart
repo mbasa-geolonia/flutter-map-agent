@@ -1,23 +1,41 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../models/map_config.dart';
 import 'ai_service.dart';
+import 'mcp_service.dart';
 
 class ClaudeService implements AiService {
   static const _apiUrl = 'https://api.anthropic.com/v1/messages';
-  static const _model = 'claude-opus-4-6';
+  static const _model = AppConfig.claudeModel;
   static const String _apiKey = AppConfig.anthropicApiKey;
 
+  final McpService? _mcp;
   final List<Map<String, dynamic>> _history = [];
+
+  ClaudeService({McpService? mcp}) : _mcp = mcp;
 
   static const _systemPrompt =
       'You are a geography and map assistant. When the user asks about a place, '
-      'location, route, or geographic topic, ALWAYS call the show_map tool to '
-      'update the map panel. After calling the tool, provide a helpful and '
-      'concise explanation of the location. Use accurate coordinates. '
+      'location, route, or geographic topic, use any available geolocation tools '
+      '(e.g. geocode, route_search) to look up accurate coordinates first, then '
+      'call the show_map tool to update the map panel. After showing the '
+      'map, provide a helpful and concise explanation. '
       'For cities, use zoom 10-12. For streets/buildings, use zoom 15-18. '
-      'For countries/continents, use zoom 4-7. Always show the map first.';
+      'For countries/continents, use zoom 4-7. Always show the map first. '
+      'When a tool result says "GeoJSON rendered" or "CSV/WKT rendered", the '
+      'geometry is already displayed with placeholder colors — do NOT '
+      'include a polygons or routes array in show_map, as the coordinates '
+      'are already rendered and will be preserved automatically. For a '
+      'thematic/choropleth map, read the attribute data included in that '
+      'tool result, then call show_map with polygon_colors (one entry per '
+      'region label) so each region\'s color reflects its value. Use '
+      'polygon_fill_color only when every polygon should be the same color. '
+      'Markers, circles, and polygons from earlier show_map calls in this '
+      'conversation are preserved automatically — do NOT re-include a '
+      'marker or circle (e.g. a search-center pin or radius circle) you '
+      'already added in a previous call, as that adds a duplicate.';
 
   static const _showMapTool = {
     'name': 'show_map',
@@ -57,6 +75,12 @@ class ClaudeService implements AiService {
                 'type': 'string',
                 'description': 'Text label shown on the pin',
               },
+              'color': {
+                'type': 'string',
+                'description':
+                    'Pin color as #RRGGBB hex (e.g. "#E53935"). '
+                    'Use consistent colors per category for thematic maps.',
+              },
             },
             'required': ['lat', 'lng', 'label'],
           },
@@ -79,6 +103,19 @@ class ClaudeService implements AiService {
                 },
               },
               'label': {'type': 'string'},
+              'fill_color': {
+                'type': 'string',
+                'description':
+                    'Fill color as #RRGGBB hex (e.g. "#FF9800"). '
+                    'A semi-transparent fill is applied automatically.',
+              },
+              'popup_info': {
+                'type': 'string',
+                'description':
+                    'Informational text shown in a popup when the user taps '
+                    'this polygon. Include relevant details such as area name, '
+                    'statistics, descriptions, or any other useful information.',
+              },
             },
             'required': ['points'],
           },
@@ -87,21 +124,111 @@ class ClaudeService implements AiService {
           'type': 'array',
           'description': 'Polyline paths or routes between locations',
           'items': {
-            'type': 'array',
-            'items': {
-              'type': 'object',
-              'properties': {
-                'lat': {'type': 'number'},
-                'lng': {'type': 'number'},
+            'type': 'object',
+            'properties': {
+              'points': {
+                'type': 'array',
+                'items': {
+                  'type': 'object',
+                  'properties': {
+                    'lat': {'type': 'number'},
+                    'lng': {'type': 'number'},
+                  },
+                  'required': ['lat', 'lng'],
+                },
               },
-              'required': ['lat', 'lng'],
+              'color': {
+                'type': 'string',
+                'description':
+                    'Route stroke color as #RRGGBB hex (e.g. "#43A047").',
+              },
             },
+            'required': ['points'],
+          },
+        },
+        'circles': {
+          'type': 'array',
+          'description': 'Radius circles for showing coverage or proximity areas',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'lat': {
+                'type': 'number',
+                'description': 'Center latitude of the circle',
+              },
+              'lng': {
+                'type': 'number',
+                'description': 'Center longitude of the circle',
+              },
+              'radius_m': {
+                'type': 'number',
+                'description': 'Radius in meters (e.g. 500 for 500 m)',
+              },
+              'label': {
+                'type': 'string',
+                'description': 'Optional label for the circle',
+              },
+              'fill_color': {
+                'type': 'string',
+                'description':
+                    'Fill color as #RRGGBB hex (e.g. "#1E88E5"). '
+                    'A semi-transparent fill is applied automatically.',
+              },
+              'stroke_color': {
+                'type': 'string',
+                'description':
+                    'Border color as #RRGGBB hex. Defaults to fill_color if omitted.',
+              },
+            },
+            'required': ['lat', 'lng', 'radius_m'],
+          },
+        },
+        'polygon_fill_color': {
+          'type': 'string',
+          'description':
+              'Override the fill color of ALL polygons already on the map, '
+              'including any auto-rendered GeoJSON isochrones or areas, to '
+              'the SAME single color. Use this when the user wants one '
+              'uniform color for an area drawn by a previous tool call. For '
+              'a thematic/choropleth map where color should vary per region '
+              'by value, use polygon_colors instead.',
+        },
+        'polygon_colors': {
+          'type': 'array',
+          'description':
+              'Set individual fill colors for existing polygons already on '
+              'the map (matched by their label), without redrawing them. '
+              'Use this for thematic/choropleth maps: after an auto-rendered '
+              'tool result gives you per-region attribute data, pick a color '
+              'per region here that reflects its value (e.g. darker for '
+              'higher counts).',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'label': {
+                'type': 'string',
+                'description':
+                    'The exact label of the polygon to recolor, as given in '
+                    'the attribute data.',
+              },
+              'fill_color': {
+                'type': 'string',
+                'description': 'Fill color as #RRGGBB hex.',
+              },
+            },
+            'required': ['label', 'fill_color'],
           },
         },
       },
       'required': ['center_lat', 'center_lng'],
     },
   };
+
+  /// Build the full tool list: show_map (local) + any MCP tools.
+  List<Map<String, dynamic>> _buildTools() => [
+        _showMapTool,
+        if (_mcp != null) ..._mcp.toClaudeTools(),
+      ];
 
   @override
   Future<void> sendMessage({
@@ -114,91 +241,291 @@ class ClaudeService implements AiService {
     _history.add({'role': 'user', 'content': userText});
 
     try {
-      final responseBody = await _callApi();
-      final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
-      final stopReason = decoded['stop_reason'] as String;
-      final content = decoded['content'] as List;
-
+      final tools = _buildTools();
       String textAccumulator = '';
-      Map<String, dynamic>? toolUseBlock;
 
-      for (final block in content) {
-        final b = block as Map<String, dynamic>;
-        if (b['type'] == 'text') {
-          textAccumulator += b['text'] as String;
-        } else if (b['type'] == 'tool_use' && b['name'] == 'show_map') {
-          toolUseBlock = b;
-        }
+      // Tracks GeoJSON-rendered map state so subsequent show_map calls
+      // (e.g. adding Start/End markers) merge with existing routes/polygons
+      // rather than replacing them.
+      MapConfig? accumulatedMapConfig;
+      // Number of polygons/routes added by the most recent GeoJSON render.
+      // polygon_fill_color applies only to these, not all accumulated features.
+      int lastGeoJsonPolygonCount = 0;
+      int lastGeoJsonRouteCount = 0;
+
+      // Merges an auto-rendered config (from GeoJSON or CSV+WKT) into the
+      // accumulated map state, updates the fill-color-override bookkeeping,
+      // and pushes the result to the UI.
+      MapConfig mergeAutoRendered(MapConfig autoConfig) {
+        final current = accumulatedMapConfig;
+        final beforeCount = current?.polygons.length ?? 0;
+        final merged = current == null
+            ? autoConfig
+            : MapConfig(
+                centerLat: autoConfig.centerLat,
+                centerLng: autoConfig.centerLng,
+                zoom: autoConfig.zoom,
+                title: autoConfig.title ?? current.title,
+                markers:
+                    dedupeMarkers([...current.markers, ...autoConfig.markers]),
+                routes: [...current.routes, ...autoConfig.routes],
+                polygons: dedupePolygons(
+                    [...current.polygons, ...autoConfig.polygons]),
+                circles:
+                    dedupeCircles([...current.circles, ...autoConfig.circles]),
+              );
+        // Recompute against the deduped result so a repeated/overlapping
+        // auto-render doesn't inflate this count with polygons that were
+        // actually merged into existing ones.
+        lastGeoJsonPolygonCount = merged.polygons.length - beforeCount;
+        lastGeoJsonRouteCount = autoConfig.routes.length;
+        accumulatedMapConfig = merged;
+        onMap(merged);
+        return merged;
       }
 
-      // Append full content array to history (required by Anthropic API)
-      _history.add({'role': 'assistant', 'content': content});
+      // Loop until Claude stops requesting tool calls.
+      // This supports multi-step flows such as:
+      //   1. Claude calls geocode (MCP) → gets coordinates
+      //   2. Claude calls show_map (local) → map updates
+      //   3. Claude returns final text → done
+      while (true) {
+        final responseBody = await _callApi(tools);
+        final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
+        final stopReason = decoded['stop_reason'] as String;
+        final content = decoded['content'] as List;
 
-      if (stopReason == 'tool_use' && toolUseBlock != null) {
-        final toolInput = toolUseBlock['input'] as Map<String, dynamic>;
-        final toolUseId = toolUseBlock['id'] as String;
-
-        final mapConfig = MapConfig.fromToolInput(toolInput);
-        onMap(mapConfig);
-
-        // Send tool result back so Claude can produce the final text response
-        _history.add({
-          'role': 'user',
-          'content': [
-            {
-              'type': 'tool_result',
-              'tool_use_id': toolUseId,
-              'content':
-                  'Map updated to show: ${mapConfig.title ?? "the requested location"}',
-            }
-          ],
-        });
-
-        final responseBody2 = await _callApi();
-        final decoded2 = jsonDecode(responseBody2) as Map<String, dynamic>;
-        final content2 = decoded2['content'] as List;
-
-        for (final block in content2) {
+        for (final block in content) {
           final b = block as Map<String, dynamic>;
-          if (b['type'] == 'text') {
-            textAccumulator += b['text'] as String;
-          }
+          if (b['type'] == 'text') textAccumulator += b['text'] as String;
         }
-        _history.add({'role': 'assistant', 'content': content2});
+
+        // Anthropic requires the full content array to be appended as-is
+        _history.add({'role': 'assistant', 'content': content});
+
+        if (stopReason != 'tool_use') break;
+
+        // Dispatch every tool_use block in this turn
+        final toolResults = <Map<String, dynamic>>[];
+        for (final block in content) {
+          final b = block as Map<String, dynamic>;
+          if (b['type'] != 'tool_use') continue;
+
+          final name = b['name'] as String;
+          final input = b['input'] as Map<String, dynamic>;
+          final id = b['id'] as String;
+
+          final String result;
+          if (name == 'show_map') {
+            // Local tool — update the map UI directly.
+            // Merge with any previously GeoJSON-rendered features so that
+            // routes/polygons aren't wiped when Claude adds markers on top.
+            // polygon_fill_color applies only to the polygons/routes added by
+            // the most recent GeoJSON render, not all accumulated features.
+            final fromTool = MapConfig.fromToolInput(input);
+            final polygonFillOverride =
+                input['polygon_fill_color'] as String?;
+            final MapConfig baseConfig;
+            if (accumulatedMapConfig == null) {
+              baseConfig = fromTool;
+            } else {
+              // Closures over `accumulatedMapConfig` elsewhere in this scope
+              // disable null-promotion, so bind a definitely-non-null local.
+              final current = accumulatedMapConfig!;
+              List<MapPolygon> mergedPolygons;
+              if (polygonFillOverride != null && lastGeoJsonPolygonCount > 0) {
+                final total = current.polygons.length;
+                final splitAt = (total - lastGeoJsonPolygonCount).clamp(0, total);
+                mergedPolygons = [
+                  ...current.polygons.sublist(0, splitAt),
+                  ...current.polygons.sublist(splitAt).map((p) =>
+                      MapPolygon(
+                        points: p.points,
+                        label: p.label,
+                        fillColor: polygonFillOverride,
+                        popupInfo: p.popupInfo,
+                      )),
+                  ...fromTool.polygons,
+                ];
+              } else {
+                mergedPolygons = [
+                  ...current.polygons,
+                  ...fromTool.polygons,
+                ];
+              }
+              baseConfig = MapConfig(
+                centerLat: fromTool.centerLat,
+                centerLng: fromTool.centerLng,
+                zoom: fromTool.zoom,
+                title: fromTool.title ?? current.title,
+                // Deduped: the LLM tends to repeat "the same" marker/circle
+                // (e.g. a search-center pin or radius circle) across
+                // multiple show_map calls within one turn.
+                markers: dedupeMarkers([...current.markers, ...fromTool.markers]),
+                routes: [
+                  ...current.routes,
+                  ...fromTool.routes,
+                ],
+                polygons: dedupePolygons(mergedPolygons),
+                circles: dedupeCircles([...current.circles, ...fromTool.circles]),
+              );
+            }
+            // Consume the last-GeoJSON counts so a second show_map call
+            // in the same turn doesn't re-apply the color override.
+            lastGeoJsonPolygonCount = 0;
+            lastGeoJsonRouteCount = 0;
+            final colorResult = applyPolygonColorOverrides(
+              baseConfig,
+              input['polygon_colors'] as List?,
+            );
+            final mapConfig = colorResult.config;
+            accumulatedMapConfig = mapConfig;
+            onMap(mapConfig);
+            final resultBuffer = StringBuffer(
+              'Map updated to show: ${mapConfig.title ?? "the requested location"}',
+            );
+            if (colorResult.matchedLabels.isNotEmpty) {
+              resultBuffer.write(
+                '. Recolored ${colorResult.matchedLabels.length} '
+                'polygon(s): ${colorResult.matchedLabels.join(", ")}',
+              );
+            }
+            if (colorResult.unmatchedLabels.isNotEmpty) {
+              final knownLabels = mapConfig.polygons
+                  .map((p) => p.label)
+                  .whereType<String>()
+                  .toSet()
+                  .join(', ');
+              resultBuffer.write(
+                '. WARNING: no polygon matched the label(s) '
+                '${colorResult.unmatchedLabels.join(", ")} — these were NOT '
+                'recolored. Known polygon labels on the map: [$knownLabels]. '
+                'Call show_map again with polygon_colors using one of these '
+                'exact labels if you still want to recolor them.',
+              );
+            }
+            result = resultBuffer.toString();
+          } else if (_mcp != null && _mcp.hasTool(name)) {
+            // MCP tool — forward to the MCP server
+            final rawResult = await _mcp.callTool(name, input);
+
+            // If the MCP result is GeoJSON or CSV+WKT, render it directly
+            // rather than asking Claude to re-emit thousands of coordinates.
+            String mcpResult = rawResult;
+            MapConfig? autoConfig;
+            String sourceLabel = 'GeoJSON';
+            try {
+              final decoded = jsonDecode(rawResult);
+              if (decoded is Map<String, dynamic> &&
+                  MapConfig.isGeoJson(decoded)) {
+                autoConfig = MapConfig.fromGeoJson(
+                  decoded,
+                  title: name.replaceAll('_', ' '),
+                  paletteOffset: (accumulatedMapConfig?.routes.length ?? 0) +
+                      (accumulatedMapConfig?.polygons.length ?? 0),
+                );
+              }
+            } catch (_) {}
+            if (autoConfig == null && MapConfig.looksLikeCsvWkt(rawResult)) {
+              sourceLabel = 'CSV/WKT';
+              autoConfig = MapConfig.fromCsvWkt(
+                rawResult,
+                title: name.replaceAll('_', ' '),
+                paletteOffset: (accumulatedMapConfig?.routes.length ?? 0) +
+                    (accumulatedMapConfig?.polygons.length ?? 0),
+              );
+            }
+            if (autoConfig != null) {
+              final hasData = autoConfig.markers.isNotEmpty ||
+                  autoConfig.routes.isNotEmpty ||
+                  autoConfig.polygons.isNotEmpty;
+              if (hasData) {
+                final merged = mergeAutoRendered(autoConfig);
+                final buffer = StringBuffer()
+                  ..write(
+                    '$sourceLabel rendered: ${autoConfig.polygons.length} new '
+                    'polygon(s) with placeholder color(s) assigned only for '
+                    'visual distinction. '
+                    'Total on map: ${merged.polygons.length} polygon(s), '
+                    '${merged.routes.length} route(s). '
+                    'Do NOT include polygon or route coordinates in show_map. '
+                    'To recolor these polygons for a thematic/choropleth map '
+                    '(one color per region, by value), call show_map with '
+                    'polygon_colors — one {label, fill_color} entry per '
+                    'region below, using the exact "map_label" column value '
+                    'as label (NOT the name/id column — some datasets have '
+                    'no natural name, so map_label is always present and is '
+                    'the only value the map actually matches against). Use '
+                    'polygon_fill_color instead only if every polygon should '
+                    'be the same color. To add markers, include them in '
+                    'show_map.',
+                  );
+                if (sourceLabel == 'CSV/WKT') {
+                  buffer
+                    ..write(
+                      '\n\nAttribute data (geometry column omitted — already '
+                      'rendered):\n',
+                    )
+                    ..write(MapConfig.stripCsvWktGeometry(rawResult));
+                }
+                mcpResult = buffer.toString();
+              }
+            }
+            result = mcpResult;
+          } else {
+            result = 'Tool "$name" is not available.';
+          }
+
+          toolResults.add({
+            'type': 'tool_result',
+            'tool_use_id': id,
+            'content': result,
+          });
+        }
+
+        _history.add({'role': 'user', 'content': toolResults});
       }
 
       onText(textAccumulator.trim());
       onDone();
     } on http.ClientException catch (e) {
       onError('Network error: ${e.message}');
+    } on TimeoutException {
+      onError('Request timed out. Please try again.');
     } catch (e) {
       onError('$e');
     }
   }
 
-  Future<String> _callApi() async {
+  Future<String> _callApi(List<Map<String, dynamic>> tools) async {
     final body = jsonEncode({
       'model': _model,
-      'max_tokens': 4096,
+      'max_tokens': 8192,
       'system': _systemPrompt,
-      'tools': [_showMapTool],
+      'tools': tools,
       'messages': _history,
     });
 
-    final response = await http.post(
-      Uri.parse(_apiUrl),
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': _apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: body,
-    );
+    final response = await http
+        .post(
+          Uri.parse(_apiUrl),
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': _apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: body,
+        )
+        .timeout(const Duration(seconds: 120));
 
+    // Decode explicitly as UTF-8 rather than via response.body, which falls
+    // back to Latin-1 if the server's Content-Type lacks a charset param —
+    // silently corrupting any non-ASCII text (see mcp_service.dart).
+    final decodedBody = utf8.decode(response.bodyBytes);
     if (response.statusCode != 200) {
-      throw Exception('API error ${response.statusCode}: ${response.body}');
+      throw Exception('API error ${response.statusCode}: $decodedBody');
     }
-    return response.body;
+    return decodedBody;
   }
 
   @override

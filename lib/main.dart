@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
+import 'theme/app_theme.dart';
 
 void main() {
   runApp(const MapAgentApp());
@@ -13,19 +14,8 @@ class MapAgentApp extends StatelessWidget {
     return MaterialApp(
       title: 'Claude Map Agent',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF6B5FD0),
-        ),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF6B5FD0),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
+      theme: appLightTheme(),
+      darkTheme: appDarkTheme(),
       home: const HomeScreen(),
     );
   }
